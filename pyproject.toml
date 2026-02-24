@@ -1,0 +1,13 @@
+[project]
+name = "qa-agent"
+version = "0.1.0"
+description = "My local QA CLI tool"
+authors = [{name="Pravab Kar"}]
+requires-python = ">=3.8"
+
+[project.scripts]
+qa-agent = "qa_agent.cli:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
