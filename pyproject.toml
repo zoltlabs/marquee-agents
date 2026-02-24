@@ -1,9 +1,13 @@
 [project]
 name = "qa-agent"
 version = "0.1.0"
-description = "My local QA CLI tool"
+description = "QA Agent — automate post-regression triage for DV engineers."
 authors = [{name="Pravab Kar"}]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
+dependencies = [
+    "claude-agent-sdk",
+    "python-dotenv",
+]
 
 [project.scripts]
 qa-agent = "qa_agent.cli:main"

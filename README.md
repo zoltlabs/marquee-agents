@@ -164,6 +164,47 @@ qa-agent <command> [options]
 | Command | Description |
 |---------|-------------|
 | `hello` | Verify the agent is installed and responsive |
+| `summarise [PATH …]` | Summarise files or directories using AI |
+
+### `qa-agent summarise`
+
+Analyse and explain files using an AI provider (Claude by default).
+
+```bash
+# Summarise the current directory (pwd)
+qa-agent summarise
+
+# Summarise explicitly with .
+qa-agent summarise .
+
+# Summarise a specific directory
+qa-agent summarise src/
+
+# Summarise a single file
+qa-agent summarise main.py
+
+# Summarise multiple files
+qa-agent summarise a.py b.py c.py
+
+# Use a specific provider (Claude is the default)
+qa-agent summarise -claude
+
+# Show sub-command help
+qa-agent summarise --help
+```
+
+#### Authentication for `summarise`
+
+The `summarise` command requires an Anthropic API key or a Claude Code OAuth session.
+
+```bash
+# Option 1 — API key
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Option 2 — Claude Code CLI OAuth
+npm install -g @anthropic-ai/claude-code
+claude login
+```
 
 ### Examples
 
@@ -181,14 +222,19 @@ qa-agent --help
 
 ```
 marquee-agents/
+├── IMPLEMENTATION/
+│   ├── summarise.md         # summarise command — architecture + provider contract
+│   └── claude_summarise.md  # Claude-specific auth, tools, error handling
 ├── qa_agent/
-│   ├── __init__.py         # Package init
-│   └── cli.py              # CLI entry-point and sub-command definitions
-├── pyproject.toml          # Build system & project metadata (PEP 517/518)
-├── setup.py                # Legacy setuptools config (for editable installs)
-├── .gitignore              # Git ignore rules
-├── CLAUDE.md               # AI assistant context & coding conventions
-└── README.md               # This file
+│   ├── __init__.py          # Package init
+│   ├── cli.py               # CLI entry-point and sub-command definitions
+│   ├── summarise.py         # Orchestrator: path resolution, output formatting
+│   └── claude_summariser.py # Claude Agent SDK provider
+├── pyproject.toml           # Build system & project metadata (PEP 517/518)
+├── setup.py                 # Legacy setuptools config (for editable installs)
+├── .gitignore               # Git ignore rules
+├── CLAUDE.md                # AI assistant context & coding conventions
+└── README.md                # This file
 ```
 
 ---
