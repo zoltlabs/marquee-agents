@@ -29,9 +29,8 @@ qa-agent summarise src/                    # summarise a directory
 qa-agent summarise main.py                 # summarise a single file
 qa-agent summarise a.py b.py c.py         # summarise multiple files
 qa-agent summarise -claude                 # explicit Claude flag (default)
-# Future:
-# qa-agent summarise -openai
-# qa-agent summarise -gemini
+qa-agent summarise -openai                 # use OpenAI (GPT-4o)
+qa-agent summarise -gemini                 # use Google Gemini
 ```
 
 ---
@@ -41,46 +40,75 @@ qa-agent summarise -claude                 # explicit Claude flag (default)
 | Module | Role |
 |--------|------|
 | `qa_agent/cli.py` | Registers `summarise` command + `paths` positional + provider flags; dispatches to `summarise.run()` |
-| `qa_agent/summarise.py` | Orchestrator: path resolution, provider routing, ANSI output formatting, error handling |
-| `qa_agent/claude_summariser.py` | Claude provider: auth resolution, SDK streaming, mode selection (dir vs files) |
+| `qa_agent/summarise.py` | Orchestrator: path resolution, **prompt/tool construction**, provider routing, ANSI output, error handling |
+| `qa_agent/providers.py` | Shared `ProviderRequest` dataclass — the contract between orchestrator and providers |
+| `qa_agent/claude_provider.py` | Claude provider: auth + Claude SDK streaming. No prompt logic. |
+| `qa_agent/openai_provider.py` | OpenAI provider: auth + streaming Chat Completions. No prompt logic. |
+| `qa_agent/gemini_provider.py` | Gemini provider: auth + streaming generate_content. No prompt logic. |
 
 ### Provider Interface Contract
 
 Every provider module **must** expose:
 
 ```python
+from qa_agent.providers import ProviderRequest
+
 PROVIDER_NAME: str                                          # e.g. "Claude (Anthropic)"
-async def stream(cwd: str, paths: list[str]) -> AsyncIterator[str]:
-    # paths == []         → summarise cwd as a directory
-    # paths == ["/dir"]   → summarise that directory
-    # paths == ["/f1"...] → summarise exactly those files
+async def stream(request: ProviderRequest) -> AsyncIterator[str]:
+    # Yield plain-text chunks from the AI
 ```
 
-`summarise.py` resolves CLI paths to absolute paths, then imports the provider
-and calls `stream(cwd, paths)`. Output formatting and error handling are
-entirely in `summarise.py`.
+`summarise.py` builds the `ProviderRequest` (with prompts + tools), then calls
+`provider.stream(request)`. Providers are pure AI-SDK drivers — they contain no
+command-specific logic.
 
 ---
 
-## Path Resolution (in `summarise.py`)
+## ProviderRequest Fields
 
-| Input | Resolved to | Agent mode |
-|-------|-------------|------------|
-| *(nothing)* | `[]` → cwd | Directory (Glob + Read) |
-| `.` or `folder/` | `["/abs/dir"]` | Directory (Glob + Read) |
-| `file.py` | `["/abs/file.py"]` | Files (Read only) |
-| `a.py b.py` | `["/abs/a.py", "/abs/b.py"]` | Files (Read only) |
+| Field | Type | Description |
+|-------|------|-------------|
+| `system_prompt` | `str` | Instruction text for the AI |
+| `user_prompt` | `str` | Task/question to answer |
+| `agent_cwd` | `str` | Working directory the agent operates in |
+| `allowed_tools` | `list[str]` | Tools the agent may call |
+| `max_turns` | `int` | Max agentic round-trips (default 10) |
+| `extra` | `dict` | Provider-specific overrides (model, temperature, etc.) |
 
-Path validation: each path is checked with `os.path.exists()` before being forwarded to the provider. Non-existent paths print an error and exit 1.
+---
+
+## Mode Selection (in `summarise.py → _build_request()`)
+
+| Input | `agent_cwd` | `allowed_tools` | Mode |
+|-------|-------------|-----------------|------|
+| *(nothing)* → `[]` | cwd | `["Glob", "Read"]` | Directory |
+| `[\"/abs/dir\"]` | that dir | `["Glob", "Read"]` | Directory |
+| `[\"/f1\", ...]` | cwd | `["Read"]` | Files |
+
+---
+
+## Path Resolution (in `summarise.py → _resolve_paths()`)
+
+| Input | Resolved to |
+|-------|-------------|
+| *(nothing)* | `[]` → cwd |
+| `.` or `folder/` | `["/abs/dir"]` |
+| `file.py` | `["/abs/file.py"]` |
+| `a.py b.py` | `["/abs/a.py", "/abs/b.py"]` |
+
+Path validation: each path is checked with `os.path.exists()` before being forwarded. Non-existent paths print an error and exit 1.
 
 ---
 
 ## Adding a New Provider
 
-1. Create `qa_agent/<name>_summariser.py` implementing `PROVIDER_NAME` + `stream(cwd, paths)`.
-2. In `summarise.py → _get_provider()`, add `elif name == "<name>": ...`.
-3. In `cli.py`, uncomment (or add) the `-<name>` flag in the provider group.
-4. Create `IMPLEMENTATION/<name>_summarise.md` with auth, deps, and error details.
+1. Create `qa_agent/<name>_provider.py` implementing `PROVIDER_NAME` + `stream(request: ProviderRequest)`.
+2. In `summarise.py → _get_provider()`, add `if name == "<name>": ...`.
+3. In `cli.py`, add the `-<name>` flag to the provider group.
+4. Create `IMPLEMENTATION/<name>_sdk.md` with auth, deps, and error details.
+
+The provider does **not** need to know about `summarise`-specific prompts — those
+live in `summarise.py`. A provider can be reused by any other command.
 
 ---
 
@@ -88,20 +116,24 @@ Path validation: each path is checked with `os.path.exists()` before being forwa
 
 | Constraint | Detail |
 |------------|--------|
-| `cwd` locked | `os.getcwd()` captured at call-time; agent cannot leave the target directory |
+| `agent_cwd` locked | Set per mode in `_build_request()`; agent cannot leave the target directory |
 | `allowed_tools` | Directory mode: `["Glob", "Read"]`; File mode: `["Read"]` — no Bash, Write, or Edit |
 | Path validation | All user-supplied paths are resolved to absolute paths and existence-checked before use |
 
 ---
 
-## Claude Provider — Auth
+## Provider Auth Summary
 
-See [`claude_summarise.md`](./claude_summarise.md) for full Claude auth detail.
+| Provider | Flag | Auth Option 1 | Auth Option 2 |
+|----------|------|---------------|---------------|
+| Claude | `-claude` | `ANTHROPIC_API_KEY` | `claude login` (Claude Code CLI) |
+| OpenAI | `-openai` | `OPENAI_API_KEY` | `codex login` (Codex CLI) |
+| Gemini | `-gemini` | `GEMINI_API_KEY` | `gcloud auth application-default login` |
 
-Short version — checked in order:
-1. `ANTHROPIC_API_KEY` env var (or `.env` in pwd)
-2. `claude login` OAuth session (Claude Code CLI must be installed)
-3. Error printed + exit 1
+See the per-provider SDK docs for details:
+- [`claude_sdk.md`](./claude_sdk.md)
+- [`openai_sdk.md`](./openai_sdk.md)
+- [`gemini_sdk.md`](./gemini_sdk.md)
 
 ---
 

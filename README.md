@@ -229,7 +229,7 @@ marquee-agents/
 │   ├── __init__.py          # Package init
 │   ├── cli.py               # CLI entry-point and sub-command definitions
 │   ├── summarise.py         # Orchestrator: path resolution, output formatting
-│   └── claude_summariser.py # Claude Agent SDK provider
+│   └── claude_provider.py   # Claude Agent SDK provider
 ├── pyproject.toml           # Build system & project metadata (PEP 517/518)
 ├── setup.py                 # Legacy setuptools config (for editable installs)
 ├── .gitignore               # Git ignore rules

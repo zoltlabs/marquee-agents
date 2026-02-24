@@ -43,15 +43,20 @@ def main() -> None:
         const="claude",
         help="Use Claude Agent SDK (default).",
     )
-    # Future providers — uncomment when modules are ready:
-    # provider_group.add_argument(
-    #     "-openai", dest="provider", action="store_const", const="openai",
-    #     help="Use OpenAI SDK.",
-    # )
-    # provider_group.add_argument(
-    #     "-gemini", dest="provider", action="store_const", const="gemini",
-    #     help="Use Google Gemini SDK.",
-    # )
+    provider_group.add_argument(
+        "-openai",
+        dest="provider",
+        action="store_const",
+        const="openai",
+        help="Use OpenAI Chat Completions API (GPT-4o).",
+    )
+    provider_group.add_argument(
+        "-gemini",
+        dest="provider",
+        action="store_const",
+        const="gemini",
+        help="Use Google Gemini API.",
+    )
     summarise_parser.set_defaults(provider="claude")
 
     # ── dispatch ──────────────────────────────────────────────────────────────

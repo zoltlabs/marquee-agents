@@ -6,6 +6,8 @@ authors = [{name="Pravab Kar"}]
 requires-python = ">=3.10"
 dependencies = [
     "claude-agent-sdk",
+    "openai",
+    "google-genai",
     "python-dotenv",
 ]
 
