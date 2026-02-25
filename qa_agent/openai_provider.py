@@ -37,6 +37,7 @@ import os
 import shutil
 from typing import AsyncIterator
 
+from qa_agent.errors import ProviderAuthError, ProviderConnectionError
 from qa_agent.providers import ProviderRequest
 
 PROVIDER_NAME = "OpenAI (GPT)"
@@ -86,7 +87,7 @@ def _resolve_auth() -> str:
             except (json.JSONDecodeError, OSError):
                 pass
 
-    raise RuntimeError(
+    raise ProviderAuthError(
         "Authentication failed.\n\n"
         "  Option 1 — API key:\n"
         "    export OPENAI_API_KEY=sk-...\n\n"
@@ -122,7 +123,7 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
     try:
         from openai import AsyncOpenAI  # type: ignore
     except ImportError as exc:
-        raise RuntimeError(
+        raise ProviderAuthError(
             "OpenAI SDK is not installed.\n"
             "  Run:  pip install openai"
         ) from exc

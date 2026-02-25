@@ -32,6 +32,9 @@ this takes hours. `qa-agent` automates the mechanical parts.
 marquee-agents/
 ├── IMPLEMENTATION/              # Per-command deep-dive docs (for agents + engineers)
 │   ├── summarise.md             # `qa-agent summarise` — architecture + provider contract
+│   ├── doctor.md                # `qa-agent doctor` — env health checker
+│   ├── logging.md               # Session logging — format, rotation, crash capture
+│   ├── ux_improvements.md       # output.py, errors.py, spinner, flags
 │   ├── claude_sdk.md            # Claude provider — auth, SDK options, error types
 │   ├── openai_sdk.md            # OpenAI provider — auth, API details, error types
 │   └── gemini_sdk.md            # Gemini provider — auth, API details, error types
@@ -39,10 +42,14 @@ marquee-agents/
 │   ├── __init__.py
 │   ├── cli.py                   # Thin entry-point; registers all sub-commands
 │   ├── providers.py             # Shared ProviderRequest dataclass (provider interface)
+│   ├── output.py                # Shared ANSI rendering: colour helpers, banner, Spinner
+│   ├── errors.py                # Error taxonomy (QAAgentError hierarchy) + central handler
+│   ├── session_log.py           # Structured session logging (JSON Lines, gzip, rotation)
 │   ├── summarise.py             # Orchestrator: prompt building, output formatting, provider routing
+│   ├── doctor.py                # Environment health checker: SDKs, auth, log dir
 │   ├── claude_provider.py       # Claude Agent SDK provider (generic; reusable across commands)
-│   ├── openai_provider.py      # OpenAI Chat Completions provider (generic; reusable across commands)
-│   └── gemini_provider.py      # Google Gemini provider (generic; reusable across commands)
+│   ├── openai_provider.py       # OpenAI Chat Completions provider
+│   └── gemini_provider.py       # Google Gemini provider
 ├── pyproject.toml
 ├── setup.py
 ├── .gitignore
@@ -57,8 +64,29 @@ marquee-agents/
 | Sub-command | Args / Flags | Description | Detail |
 |------------|-------|-------------|--------|
 | `hello` | — | Prints a greeting | — |
-| `summarise` | `[PATH …]` `-claude` *(default)* `-openai` `-gemini` | Summarise files or directories using AI | [`IMPLEMENTATION/summarise.md`](./IMPLEMENTATION/summarise.md) |
+| `summarise` | `[PATH …]` `--provider`/`-p {claude,openai,gemini}` | Summarise files or directories using AI | [`IMPLEMENTATION/summarise.md`](./IMPLEMENTATION/summarise.md) |
+| `doctor` | `--verbose`/`-v` | Check SDKs, auth, and log system | [`IMPLEMENTATION/doctor.md`](./IMPLEMENTATION/doctor.md) |
 | *(none)* | — | Prints help | — |
+
+### Global Flags (available on ALL commands)
+
+| Flag | Short | Default | Effect |
+|------|-------|---------|--------|
+| `--verbose` | `-v` | off | Detailed progress, raw provider output, full tracebacks |
+| `--debug` | — | off | `--verbose` + write session log to disk |
+| `--version` | `-V` | — | Print `qa-agent <version>` and exit |
+
+---
+
+## Migration Notes
+
+> **Breaking change — provider flags renamed** (previous single-dash flags removed)
+>
+> | Old | New |
+> |-----|-----|
+> | `qa-agent summarise -claude` | `qa-agent summarise` *(claude is still the default)* |
+> | `qa-agent summarise -openai` | `qa-agent summarise -p openai` |
+> | `qa-agent summarise -gemini` | `qa-agent summarise -p gemini` |
 
 ---
 
@@ -69,17 +97,19 @@ marquee-agents/
 - **f-strings** over `.format()` or `%`
 - `cli.py` stays thin — logic goes in dedicated modules under `qa_agent/`
 - `subprocess.run()` over `os.system()`
+- ANSI output — import from `qa_agent.output`, never define colour helpers locally
+- Error handling — raise `QAAgentError` subclasses, never call `sys.exit()` inside modules
 
 ### Naming
 
 | Kind | Convention | Example |
-|------|-----------|---------|
+|------|-----------|---------| 
 | Modules | `snake_case` | `claude_provider.py` |
 | Functions | `snake_case` | `def stream():` |
 | Classes | `PascalCase` | `class TriageReport:` |
 | Constants | `UPPER_SNAKE_CASE` | `DEFAULT_TIMEOUT = 30` |
 | CLI sub-commands | `snake_case` | `qa-agent summarise` |
-| CLI provider flags | `-<name>` | `qa-agent summarise -claude` |
+| CLI provider flag | `--provider / -p` | `qa-agent summarise -p gemini` |
 
 ---
 
@@ -102,14 +132,18 @@ Commit format: `feat(cli): add summarise command`
 ```bash
 pip install -e .                           # Install in editable/dev mode
 qa-agent hello                             # Greeting
-qa-agent summarise                         # Summarise current dir (pwd) — uses Claude by default
+qa-agent doctor                            # Check environment health
+qa-agent doctor --verbose                  # Show raw values/paths
+qa-agent summarise                         # Summarise current dir (pwd) — Claude by default
 qa-agent summarise .                       # Same, explicit
 qa-agent summarise src/                    # Summarise a directory
 qa-agent summarise main.py                 # Summarise a single file
 qa-agent summarise a.py b.py c.py         # Summarise multiple files
-qa-agent summarise -claude                 # Explicit Claude flag (default)
-qa-agent summarise -openai                 # Use OpenAI (GPT-4o)
-qa-agent summarise -gemini                 # Use Google Gemini
+qa-agent summarise -p openai               # Use OpenAI (GPT-4o)
+qa-agent summarise -p gemini               # Use Google Gemini
+qa-agent --verbose summarise .             # Verbose output + full tracebacks
+qa-agent --debug summarise .              # Debug mode: verbose + session log written
+qa-agent --version                         # Print version
 qa-agent --help                            # All commands
 qa-agent summarise --help                  # Sub-command help
 
@@ -131,3 +165,29 @@ export GEMINI_API_KEY=AIza...
 gcloud auth application-default login
 export GOOGLE_CLOUD_PROJECT=your-project
 ```
+
+---
+
+## Session Logs
+
+```bash
+# View last session log (macOS: use gzcat instead of zcat)
+zcat ~/.local/share/qa-agent/logs/last-session.log
+gzcat ~/Library/Application\ Support/ZoltLabs/qa-agent/logs/last-session.log
+
+# Pretty-print JSON
+zcat ... | python -m json.tool
+
+# List all session logs
+ls -lh ~/.local/share/qa-agent/logs/
+
+# Delete all logs (reset)
+rm -rf ~/.local/share/qa-agent/logs/
+
+# Force a debug session
+qa-agent --debug summarise .
+```
+
+Log directory (platform-specific):
+- **macOS**: `~/Library/Application Support/ZoltLabs/qa-agent/logs/`
+- **Linux**: `~/.local/share/qa-agent/logs/`

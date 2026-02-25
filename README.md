@@ -1,6 +1,6 @@
 # marquee-agents — QA Agent CLI
 
-> **Automated post-regression triage for DV engineers.**  
+> **Automated post-regression triage for DV engineers.**
 > After every regression run, `qa-agent` automatically reconstructs failing configs, re-invokes debug scripts, and collates logs — turning hours of mechanical work into a single command.
 
 ---
@@ -13,6 +13,7 @@
 - [Installation — Development](#installation--development)
 - [Installation — Production (Server / Sysadmin)](#installation--production-server--sysadmin)
 - [Usage](#usage)
+- [Authentication](#authentication)
 - [Project Structure](#project-structure)
 - [Adding New Sub-commands](#adding-new-sub-commands)
 - [Running Tests](#running-tests)
@@ -51,7 +52,7 @@ DV engineers can focus on the failures themselves rather than the process of fin
 
 | Tool | Version |
 |------|---------|
-| Python | ≥ 3.8 |
+| Python | ≥ 3.10 |
 | pip | latest |
 
 ---
@@ -70,11 +71,12 @@ python3 -m venv venv
 source venv/bin/activate        # macOS / Linux
 # venv\Scripts\activate         # Windows
 
-# 3. Install in editable mode
+# 3. Install in editable mode (installs all dependencies)
 pip install -e .
 
 # 4. Verify
 qa-agent hello
+qa-agent doctor      # check your environment
 ```
 
 ---
@@ -85,7 +87,7 @@ qa-agent hello
 
 ### Prerequisites
 
-- Python 3.8+ installed system-wide (`python3 --version`)
+- Python 3.10+ installed system-wide (`python3 --version`)
 - `pip` available (`pip3 --version`)
 - Sufficient permissions to install into the target Python environment
 
@@ -101,6 +103,7 @@ sudo pip3 install .
 
 # 3. Verify the command is available system-wide
 qa-agent hello
+qa-agent doctor
 ```
 
 All users on the server can now run `qa-agent` without any virtual environment setup.
@@ -164,7 +167,32 @@ qa-agent <command> [options]
 | Command | Description |
 |---------|-------------|
 | `hello` | Verify the agent is installed and responsive |
+| `doctor` | Check that all SDKs and credentials are correctly configured |
 | `summarise [PATH …]` | Summarise files or directories using AI |
+
+### Global Flags
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--verbose` | `-v` | Show detailed progress, raw provider output, and full tracebacks |
+| `--debug` | — | `--verbose` + write a session log to disk for debugging |
+| `--version` | `-V` | Print version and exit |
+
+---
+
+### `qa-agent doctor`
+
+Run this **before your first `summarise`** to confirm all dependencies are installed
+and credentials are set.
+
+```bash
+qa-agent doctor            # basic check — exit 0 = ready
+qa-agent doctor --verbose  # show raw values and full paths
+```
+
+Exit codes: `0` = all checks passed (or warnings only) · `1` = one or more errors found.
+
+---
 
 ### `qa-agent summarise`
 
@@ -186,16 +214,36 @@ qa-agent summarise main.py
 # Summarise multiple files
 qa-agent summarise a.py b.py c.py
 
-# Use a specific provider (Claude is the default)
-qa-agent summarise -claude
+# Use a specific provider
+qa-agent summarise -p openai      # OpenAI GPT-4o
+qa-agent summarise -p gemini      # Google Gemini
+qa-agent summarise -p claude      # Claude (default)
+
+# Long form
+qa-agent summarise --provider openai src/
 
 # Show sub-command help
 qa-agent summarise --help
 ```
 
-#### Authentication for `summarise`
+> **Migration note** — the old single-dash provider flags (`-claude`, `-openai`, `-gemini`)
+> have been replaced by `--provider / -p`.
 
-The `summarise` command requires an Anthropic API key or a Claude Code OAuth session.
+#### Provider choices
+
+| Flag | Provider | Model |
+|------|----------|-------|
+| *(default)* | Claude (Anthropic) | claude-agent-sdk |
+| `-p openai` | OpenAI | GPT-4o |
+| `-p gemini` | Google Gemini | gemini-2.5-flash |
+
+---
+
+## Authentication
+
+Run `qa-agent doctor` to verify your credentials are correctly configured.
+
+### Claude
 
 ```bash
 # Option 1 — API key
@@ -206,14 +254,26 @@ npm install -g @anthropic-ai/claude-code
 claude login
 ```
 
-### Examples
+### OpenAI
 
 ```bash
-# Verify installation
-qa-agent hello
+# Option 1 — API key
+export OPENAI_API_KEY=sk-...
 
-# Show help
-qa-agent --help
+# Option 2 — Codex CLI OAuth
+npm install -g @openai/codex
+codex login
+```
+
+### Gemini
+
+```bash
+# Option 1 — Gemini API key (Google AI Studio)
+export GEMINI_API_KEY=AIza...
+
+# Option 2 — Vertex AI + gcloud Application Default Credentials
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT=your-project
 ```
 
 ---
@@ -224,12 +284,22 @@ qa-agent --help
 marquee-agents/
 ├── IMPLEMENTATION/
 │   ├── summarise.md         # summarise command — architecture + provider contract
-│   └── claude_summarise.md  # Claude-specific auth, tools, error handling
+│   ├── doctor.md            # doctor command — env health checker design
+│   ├── logging.md           # session logging — format, rotation, crash capture
+│   ├── ux_improvements.md   # output.py, errors.py, spinner, global flags
+│   └── claude_sdk.md        # Claude-specific auth, tools, error handling
 ├── qa_agent/
 │   ├── __init__.py          # Package init
 │   ├── cli.py               # CLI entry-point and sub-command definitions
+│   ├── output.py            # Shared ANSI rendering (colour helpers, banner, Spinner)
+│   ├── errors.py            # Error taxonomy (QAAgentError hierarchy) + central handler
+│   ├── session_log.py       # Structured session logging (JSON Lines, gzip, rotation)
+│   ├── providers.py         # Shared ProviderRequest dataclass
 │   ├── summarise.py         # Orchestrator: path resolution, output formatting
-│   └── claude_provider.py   # Claude Agent SDK provider
+│   ├── doctor.py            # Environment health checker
+│   ├── claude_provider.py   # Claude Agent SDK provider
+│   ├── openai_provider.py   # OpenAI Chat Completions provider
+│   └── gemini_provider.py   # Google Gemini provider
 ├── pyproject.toml           # Build system & project metadata (PEP 517/518)
 ├── setup.py                 # Legacy setuptools config (for editable installs)
 ├── .gitignore               # Git ignore rules
@@ -244,8 +314,9 @@ marquee-agents/
 1. Open `qa_agent/cli.py` and register the new sub-parser inside `main()`.
 2. Add the handler logic in a new module (`qa_agent/my_command.py`) — keep `cli.py` thin.
 3. Call the module from the `if/elif` dispatch block in `main()`.
+4. Import from `qa_agent.output` for rendering; raise `QAAgentError` subclasses for errors.
 
-See [`CLAUDE.md`](./CLAUDE.md) for full conventions and an example.
+See [`CLAUDE.md`](./CLAUDE.md) for full conventions.
 
 ---
 

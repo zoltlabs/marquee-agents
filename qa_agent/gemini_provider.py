@@ -40,6 +40,7 @@ import os
 import shutil
 from typing import AsyncIterator
 
+from qa_agent.errors import ProviderAuthError
 from qa_agent.providers import ProviderRequest
 
 PROVIDER_NAME = "Google Gemini"
@@ -90,7 +91,7 @@ def _resolve_auth() -> dict:
             "location": location,
         }
 
-    raise RuntimeError(
+    raise ProviderAuthError(
         "Authentication failed.\n\n"
         "  Option 1 — Gemini API key (Google AI Studio):\n"
         "    export GEMINI_API_KEY=AIza...\n\n"
@@ -120,7 +121,7 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
         from google import genai  # type: ignore
         from google.genai import types  # type: ignore
     except ImportError as exc:
-        raise RuntimeError(
+        raise ProviderAuthError(
             "Google Gen AI SDK is not installed.\n"
             "  Run:  pip install google-genai"
         ) from exc

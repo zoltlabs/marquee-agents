@@ -1,11 +1,48 @@
 import argparse
+import importlib.metadata
+import sys
+
+from qa_agent.session_log import SessionLog
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="qa-agent",
         description="QA Agent — automate post-regression triage for DV engineers.",
+        epilog=(
+            "Examples:\n"
+            "  qa-agent doctor                   # check environment\n"
+            "  qa-agent summarise                # summarise cwd\n"
+            "  qa-agent summarise src/ -p gemini\n"
+            "  qa-agent --version\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+    # ── Global flags ──────────────────────────────────────────────────────────
+    try:
+        _version = importlib.metadata.version("qa-agent")
+    except importlib.metadata.PackageNotFoundError:
+        _version = "dev"
+
+    parser.add_argument(
+        "--version", "-V",
+        action="version",
+        version=f"%(prog)s {_version}",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=False,
+        help="Show detailed progress, raw provider output, and full tracebacks.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Developer mode: --verbose + write a session log to disk.",
+    )
+
     subparsers = parser.add_subparsers(dest="command")
 
     # ── hello ─────────────────────────────────────────────────────────────────
@@ -22,7 +59,7 @@ def main() -> None:
             "  qa-agent summarise a.py b.py     # summarise multiple files\n"
             "  qa-agent summarise src/          # summarise an entire directory\n"
             "  qa-agent summarise .             # summarise current directory explicitly\n\n"
-            "Defaults to Claude. Pass a provider flag to override."
+            "Defaults to Claude. Use -p / --provider to override."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -30,44 +67,68 @@ def main() -> None:
         "paths",
         nargs="*",
         metavar="PATH",
-        help=(
-            "Files or directories to summarise. "
-            "Omit to summarise the current directory."
+        help="Files or directories to summarise. Omit to summarise the current directory.",
+    )
+    summarise_parser.add_argument(
+        "--provider", "-p",
+        choices=["claude", "openai", "gemini"],
+        default="claude",
+        metavar="PROVIDER",
+        help="AI provider to use: claude (default), openai, gemini.",
+    )
+
+    # ── doctor ────────────────────────────────────────────────────────────────
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Check environment health (SDKs, auth, log system).",
+        description=(
+            "Validates that all provider SDKs and credentials are correctly\n"
+            "configured. Exit 0 = ready, Exit 1 = one or more errors found."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    provider_group = summarise_parser.add_mutually_exclusive_group()
-    provider_group.add_argument(
-        "-claude",
-        dest="provider",
-        action="store_const",
-        const="claude",
-        help="Use Claude Agent SDK (default).",
+    doctor_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Show raw values and full paths for each check.",
     )
-    provider_group.add_argument(
-        "-openai",
-        dest="provider",
-        action="store_const",
-        const="openai",
-        help="Use OpenAI Chat Completions API (GPT-4o).",
-    )
-    provider_group.add_argument(
-        "-gemini",
-        dest="provider",
-        action="store_const",
-        const="gemini",
-        help="Use Google Gemini API.",
-    )
-    summarise_parser.set_defaults(provider="claude")
 
     # ── dispatch ──────────────────────────────────────────────────────────────
     args = parser.parse_args()
 
-    if args.command == "hello":
-        print("Hello 👋 I am QA Agent. How can I help you?")
+    # --debug implies --verbose
+    if getattr(args, "debug", False):
+        args.verbose = True
 
-    elif args.command == "summarise":
-        from qa_agent.summarise import run
-        run(provider=args.provider, paths=args.paths)
+    log = SessionLog.open(debug=getattr(args, "debug", False))
+    exit_code = 0
 
-    else:
-        parser.print_help()
+    try:
+        if args.command == "hello":
+            print("Hello 👋 I am QA Agent. How can I help you?")
+
+        elif args.command == "summarise":
+            from qa_agent.summarise import run
+            run(
+                provider=args.provider,
+                paths=args.paths,
+                verbose=args.verbose,
+                log=log,
+            )
+
+        elif args.command == "doctor":
+            from qa_agent.doctor import run as doctor_run
+            doctor_run(verbose=args.verbose)
+
+        else:
+            parser.print_help()
+
+    except SystemExit as exc:
+        exit_code = int(exc.code) if exc.code is not None else 0
+        raise
+    except Exception as exc:
+        from qa_agent.errors import handle_exception
+        exit_code = handle_exception(exc, verbose=getattr(args, "verbose", False), log=log)
+        sys.exit(exit_code)
+    finally:
+        log.close(exit_code)

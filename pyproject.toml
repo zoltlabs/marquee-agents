@@ -9,6 +9,7 @@ dependencies = [
     "openai",
     "google-genai",
     "python-dotenv",
+    "platformdirs",
 ]
 
 [project.scripts]
