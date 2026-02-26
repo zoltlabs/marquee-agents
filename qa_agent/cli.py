@@ -14,6 +14,7 @@ def main() -> None:
             "  qa-agent doctor                   # check environment\n"
             "  qa-agent summarise                # summarise cwd\n"
             "  qa-agent summarise src/ -p gemini\n"
+            "  qa-agent analyse                  # parse results and generate QA report\n"
             "  qa-agent --version\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -93,6 +94,57 @@ def main() -> None:
         help="Show raw values and full paths for each check.",
     )
 
+    # ── analyse ───────────────────────────────────────────────────────────────
+    analyse_parser = subparsers.add_parser(
+        "analyse",
+        help="Parse a regression results file and generate a QA report.",
+        description=(
+            "Reads results.doc or results_new.doc from the working directory,\n"
+            "identifies FAILED entries, and writes a Markdown QA report.\n\n"
+            "  qa-agent analyse\n"
+            "  qa-agent analyse --mode slurm --working-dir /path/to/run\n"
+            "  qa-agent analyse --output my_report.md\n"
+            "  qa-agent analyse --test apcit_cpl_out_order   # single test only\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    analyse_parser.add_argument(
+        "--mode",
+        choices=["basic", "slurm"],
+        default=None,
+        help="Explicit mode override (default: auto-detected from filename).",
+    )
+    analyse_parser.add_argument(
+        "--working-dir",
+        default=".",
+        metavar="PATH",
+        help="Directory containing results.doc / results_new.doc (default: CWD).",
+    )
+    analyse_parser.add_argument(
+        "--output",
+        default=None,
+        metavar="PATH",
+        help="Path for the output report (default: qa_report_<timestamp>.md in CWD).",
+    )
+    analyse_parser.add_argument(
+        "--script", "-s",
+        default="",
+        metavar="SCRIPT",
+        help="Path to the debug shell script (embedded in report debug commands).",
+    )
+    analyse_parser.add_argument(
+        "--test", "-t",
+        default=None,
+        metavar="NAME",
+        help="Focus on a single test case by name (skips all other failures).",
+    )
+    analyse_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=False,
+        help="Print detailed progress to stdout (debug dirs, command text, etc.).",
+    )
+
     # ── dispatch ──────────────────────────────────────────────────────────────
     args = parser.parse_args()
 
@@ -119,6 +171,17 @@ def main() -> None:
         elif args.command == "doctor":
             from qa_agent.doctor import run as doctor_run
             doctor_run(verbose=args.verbose)
+
+        elif args.command == "analyse":
+            from qa_agent.analyse import run as analyse_run
+            analyse_run(
+                mode=args.mode,
+                working_dir=args.working_dir,
+                output=args.output,
+                script=args.script,
+                test_filter=args.test,
+                verbose=args.verbose,
+            )
 
         else:
             parser.print_help()

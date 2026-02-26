@@ -32,6 +32,7 @@ this takes hours. `qa-agent` automates the mechanical parts.
 marquee-agents/
 ├── IMPLEMENTATION/              # Per-command deep-dive docs (for agents + engineers)
 │   ├── summarise.md             # `qa-agent summarise` — architecture + provider contract
+│   ├── analyse.md               # `qa-agent analyse` — results parser + QA report writer
 │   ├── doctor.md                # `qa-agent doctor` — env health checker
 │   ├── logging.md               # Session logging — format, rotation, crash capture
 │   ├── ux_improvements.md       # output.py, errors.py, spinner, flags
@@ -46,10 +47,12 @@ marquee-agents/
 │   ├── errors.py                # Error taxonomy (QAAgentError hierarchy) + central handler
 │   ├── session_log.py           # Structured session logging (JSON Lines, gzip, rotation)
 │   ├── summarise.py             # Orchestrator: prompt building, output formatting, provider routing
+│   ├── analyse.py               # Regression results parser + Markdown QA report writer
 │   ├── doctor.py                # Environment health checker: SDKs, auth, log dir
 │   ├── claude_provider.py       # Claude Agent SDK provider (generic; reusable across commands)
 │   ├── openai_provider.py       # OpenAI Chat Completions provider
 │   └── gemini_provider.py       # Google Gemini provider
+├── run_apci_2025.pl             # Default debug Perl script (used in generated commands)
 ├── pyproject.toml
 ├── setup.py
 ├── .gitignore
@@ -66,6 +69,7 @@ marquee-agents/
 | `hello` | — | Prints a greeting | — |
 | `summarise` | `[PATH …]` `--provider`/`-p {claude,openai,gemini}` | Summarise files or directories using AI | [`IMPLEMENTATION/summarise.md`](./IMPLEMENTATION/summarise.md) |
 | `doctor` | `--verbose`/`-v` | Check SDKs, auth, and log system | [`IMPLEMENTATION/doctor.md`](./IMPLEMENTATION/doctor.md) |
+| `analyse` | `[--mode basic\|slurm]` `[--working-dir PATH]` `[--output PATH]` `[--script/-s SCRIPT]` `[--test NAME]` `[--verbose/-v]` | Parse regression results, interactively select source/script files, re-run each failure in a debug subdir, capture logs, and write a grouped Markdown QA report | [`IMPLEMENTATION/analyse.md`](./IMPLEMENTATION/analyse.md) |
 | *(none)* | — | Prints help | — |
 
 ### Global Flags (available on ALL commands)
@@ -146,6 +150,13 @@ qa-agent --debug summarise .              # Debug mode: verbose + session log wr
 qa-agent --version                         # Print version
 qa-agent --help                            # All commands
 qa-agent summarise --help                  # Sub-command help
+qa-agent analyse                              # Auto-detect file, interactive script/source selection, run debug
+qa-agent analyse --working-dir /path/to/run   # Specify regression dir
+qa-agent analyse --mode slurm                 # Force slurm mode
+qa-agent analyse --output report.md           # Custom report path
+qa-agent analyse -s /tools/run_debug.pl       # Skip script selection prompt
+qa-agent analyse --test apcit_cpl_out_order   # Focus on a single test case
+qa-agent analyse --verbose                    # Print detailed progress (full cmd, abs paths)
 
 # Claude auth — Option 1 (API key)
 export ANTHROPIC_API_KEY=sk-ant-...

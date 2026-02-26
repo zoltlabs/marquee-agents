@@ -169,6 +169,7 @@ qa-agent <command> [options]
 | `hello` | Verify the agent is installed and responsive |
 | `doctor` | Check that all SDKs and credentials are correctly configured |
 | `summarise [PATH …]` | Summarise files or directories using AI |
+| `analyse` | Parse a regression results file, run debug commands per failure, and write a grouped Markdown QA report |
 
 ### Global Flags
 
@@ -239,6 +240,77 @@ qa-agent summarise --help
 
 ---
 
+### `qa-agent analyse`
+
+The primary post-regression triage command. **No AI required — pure Python.**
+
+`qa-agent analyse` runs a **7-step pipeline**:
+
+1. **Finds** `results.doc` or `results_new.doc` in the working directory.
+2. **Parses** every result line to extract passed/failed tests with their configs and seeds.
+3. **Interactively selects** a `.csh` environment source file (arrow-key prompt; auto-skipped on non-TTY).
+4. **Interactively selects** a `.pl` debug script (arrow-key prompt; skipped when `--script` is passed).
+5. **Creates** a dedicated `debug_<test>_<hash>_<seed>/` subdirectory for each failure.
+6. **Runs** the debug command for each failure, writing `stdout` + `stderr` to `debug.log` (2h timeout).
+7. **Writes** a grouped-by-test Markdown report including config tables, debug commands, and the last 30 lines of each log.
+
+```bash
+# Auto-detect results.doc / results_new.doc in the current directory
+qa-agent analyse
+
+# Specify the regression run directory
+qa-agent analyse --working-dir /path/to/regression/run
+
+# Force slurm mode (auto-detected from filename by default)
+qa-agent analyse --mode slurm
+
+# Write the report to a custom path
+qa-agent analyse --output /tmp/report.md
+
+# Skip the interactive script prompt — embed this path in debug commands
+qa-agent analyse -s /tools/run_debug.pl
+
+# Focus on a single failing test (all others are skipped)
+qa-agent analyse --test apcit_cpl_out_order
+
+# Print detailed progress: full debug commands + absolute paths
+qa-agent analyse --verbose
+
+# Combine options
+qa-agent analyse --working-dir /path/to/run --output report.md -s /tools/run_debug.pl
+```
+
+#### Flags
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--mode basic\|slurm` | — | auto-detected from filename | Override mode detection |
+| `--working-dir PATH` | — | CWD | Directory containing the results file |
+| `--output PATH` | — | `qa_report_<timestamp>.md` | Output report path |
+| `--script PATH` | `-s` | *(interactive selection)* | Debug script path; skips the arrow-key prompt |
+| `--test NAME` | `-t` | *(all failures)* | Focus on a single test case by name; skips all others |
+| `--verbose` | `-v` | off | Print detailed progress: full commands, absolute debug dir paths |
+
+#### Mode detection
+
+| Filename | Mode |
+|----------|------|
+| `results.doc` | `basic` |
+| `results_new.doc` | `slurm` |
+
+#### Debug directory layout
+
+For every failure, a subdirectory is created under `--working-dir`:
+
+```
+<working-dir>/
+├── results.doc
+├── debug_apcit_cpl_out_order_a3f9c1_1234/
+│   └── debug.log    ← stdout + stderr from the debug run
+└── debug_pcie_bar_test_c1f3a9_9999/
+    └── debug.log
+```
+
 ## Authentication
 
 Run `qa-agent doctor` to verify your credentials are correctly configured.
@@ -284,6 +356,7 @@ export GOOGLE_CLOUD_PROJECT=your-project
 marquee-agents/
 ├── IMPLEMENTATION/
 │   ├── summarise.md         # summarise command — architecture + provider contract
+│   ├── analyse.md           # analyse command — results parser + QA report writer
 │   ├── doctor.md            # doctor command — env health checker design
 │   ├── logging.md           # session logging — format, rotation, crash capture
 │   ├── ux_improvements.md   # output.py, errors.py, spinner, global flags
@@ -296,6 +369,7 @@ marquee-agents/
 │   ├── session_log.py       # Structured session logging (JSON Lines, gzip, rotation)
 │   ├── providers.py         # Shared ProviderRequest dataclass
 │   ├── summarise.py         # Orchestrator: path resolution, output formatting
+│   ├── analyse.py           # Regression results parser + Markdown QA report writer
 │   ├── doctor.py            # Environment health checker
 │   ├── claude_provider.py   # Claude Agent SDK provider
 │   ├── openai_provider.py   # OpenAI Chat Completions provider
