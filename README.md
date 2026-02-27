@@ -1,7 +1,7 @@
 # marquee-agents — QA Agent CLI
 
-> **Automated post-regression triage for DV engineers.**
-> After every regression run, `qa-agent` automatically reconstructs failing configs, re-invokes debug scripts, and collates logs — turning hours of mechanical work into a single command.
+> **Regression automation & post-regression triage for DV engineers.**
+> `qa-agent` automates the mechanical work of running regressions and triaging failures — sourcing environments, executing debug scripts, collating logs, and generating structured QA reports. AI-powered summarisation is available today; AI-driven triage is on the roadmap.
 
 ---
 
@@ -26,23 +26,41 @@
 
 After every regression run, DV engineers manually:
 
-1. Go through results files to find failures
-2. Reconstruct the exact **config and seed** for each failure
-3. Re-invoke the **debug script** manually
-4. Dig through logs to piece together root causes
+1. Source the correct shell environment for the simulator
+2. Locate the right regression script, filelist, and config files
+3. Execute the regression and monitor its output
+4. Go through the results file to find every failure
+5. Reconstruct the exact **config + seed** for each failure
+6. Re-invoke the **debug script** for each failure manually
+7. Dig through logs to piece together root causes
+8. Write up a structured report
 
-For a regression with **10+ failures**, this takes **hours** — and most of it is mechanical work that doesn't require human judgment.
+For a regression with **10+ failures**, this takes **hours** — and most of it is mechanical work that does not require human judgment.
 
 ---
 
 ## What qa-agent Does
 
-`qa-agent` automates the mechanical parts of this pipeline:
+`qa-agent` automates the full DV regression workflow end-to-end:
 
-- **Parses** regression result files to extract all failures
-- **Reconstructs** the exact config + seed combination for each failure
-- **Re-invokes** the debug script automatically for each failed test
-- **Aggregates** logs into a single, readable triage report
+### Regression (`qa-agent regression`)
+- **Sources** the correct `.csh` environment file (interactive or auto-select)
+- **Locates** `filelist.txt`, regression scripts, and Slurm config automatically
+- **Runs** a basic (Python) or Slurm regression with live-streamed output
+- **Captures** a timestamped log and verifies the results file was produced
+
+### Triage (`qa-agent analyse`)
+- **Parses** `results.doc` / `results_new.doc` to extract every failure
+- **Reconstructs** the exact config + seed for each failure
+- **Re-invokes** the debug script automatically in an isolated subdirectory
+- **Aggregates** logs and writes a structured Markdown QA report
+
+### AI Summarisation (`qa-agent summarise`) — available now
+- **Summarises** source files, directories, or configs using Claude, OpenAI, or Gemini
+
+### AI-Driven Triage — roadmap
+- Automated root-cause correlation across multiple failures
+- Natural-language triage report generation
 
 DV engineers can focus on the failures themselves rather than the process of finding them.
 
@@ -430,7 +448,7 @@ marquee-agents/
 │   ├── doctor.md            # doctor command — env health checker design
 │   ├── help_and_hello.md    # hello + guide commands — welcome screen + user guides
 │   ├── logging.md           # session logging — format, rotation, crash capture
-│   ├── ux_improvements.md   # output.py, errors.py, spinner, global flags
+│   ├── cli_consistency.md   # CLI flag + output consistency plan (tasks + conventions)
 │   └── claude_sdk.md        # Claude-specific auth, tools, error handling
 ├── qa_agent/
 │   ├── __init__.py          # Package init

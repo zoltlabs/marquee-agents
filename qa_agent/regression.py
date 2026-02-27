@@ -26,68 +26,13 @@ from typing import Optional
 from qa_agent.errors import ConfigError, QAAgentError
 from qa_agent.output import (
     bold, cyan, dim, green, red, rule, yellow,
-    print_regression_banner, Spinner,
+    print_header, print_summary_table, arrow_select, Spinner,
 )
 from qa_agent.step_gate import StepLog, step_gate, write_log
 
 # ── Package / repo root ────────────────────────────────────────────────────────
 
 PACKAGE_DIR: Path = Path(__file__).resolve().parent.parent  # repo root
-
-
-# ── Interactive arrow-key selector ────────────────────────────────────────────
-
-def _arrow_select(prompt: str, options: list[tuple[str, str]]) -> int:
-    """Arrow-key interactive selector (TTY only).
-
-    options: list of (label, tag) tuples — tag shown in brackets.
-    Returns the chosen index.
-    Falls back to index 0 if not a TTY.
-    """
-    if not sys.stdin.isatty() or not options:
-        return 0
-
-    selected = 0
-    n = len(options)
-
-    print(f"\n  {prompt}\n")
-
-    def _render(sel: int) -> None:
-        sys.stdout.write(f"\033[{n}A")
-        for i, (label, tag) in enumerate(options):
-            prefix = f"  {cyan('❯')}  " if i == sel else "     "
-            tag_str = dim(f"[{tag}]")
-            sys.stdout.write(f"\r{prefix}{bold(label) if i == sel else label}  {tag_str}\n")
-        sys.stdout.flush()
-
-    # Initial render
-    for i, (label, tag) in enumerate(options):
-        prefix = f"  {cyan('❯')}  " if i == 0 else "     "
-        tag_str = dim(f"[{tag}]")
-        print(f"{prefix}{bold(label) if i == 0 else label}  {tag_str}")
-
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        while True:
-            ch = sys.stdin.read(1)
-            if ch in ("\r", "\n"):
-                break
-            elif ch == "\x1b":
-                seq = sys.stdin.read(2)
-                if seq == "[A":    # up
-                    selected = (selected - 1) % n
-                elif seq == "[B":  # down
-                    selected = (selected + 1) % n
-                _render(selected)
-            elif ch == "\x03":     # Ctrl-C
-                raise KeyboardInterrupt
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    print()
-    return selected
 
 
 # ── Step 1: .csh file discovery & selection ───────────────────────────────────
@@ -135,7 +80,7 @@ def _select_source_file() -> Optional[Path]:
 
     # Interactive selector
     options = [(p.name, tag) for p, tag in candidates]
-    idx = _arrow_select("🔧 Select source file to use:", options)
+    idx = arrow_select("🔧 Select source file to use:", options)
     chosen_path = candidates[idx][0]
     print(f"  {green('✓')}  Using source file: {bold(chosen_path.name)}")
     return chosen_path
@@ -236,7 +181,7 @@ def _select_regression_py(slurm: bool = False) -> Optional[Path]:
 
     # Interactive selector
     options = [(p.name, tag) for p, tag in candidates]
-    idx = _arrow_select("🐍 Select regression script:", options)
+    idx = arrow_select("🐍 Select regression script:", options)
     chosen_path = candidates[idx][0]
     print(f"  {green('✓')}  Using regression script: {bold(chosen_path.name)}")
     return chosen_path
@@ -302,7 +247,7 @@ def _locate_run_questa() -> Optional[Path]:
 
     # Both exist — interactive selector
     options = [(p.name, tag) for p, tag in candidates]
-    idx = _arrow_select("🚀 Select run_questa.sh to use:", options)
+    idx = arrow_select("🚀 Select run_questa.sh to use:", options)
     chosen_path = candidates[idx][0]
     print(f"  {green('✓')}  Using: {bold(chosen_path.name)}")
     return chosen_path
@@ -437,7 +382,7 @@ def run(
     log: object = None,
 ) -> None:
     """Main entry-point called from cli.py."""
-    print_regression_banner("slurm" if slurm else "basic")
+    print_header("regression", f"Mode: {'slurm' if slurm else 'basic'}")
 
     mode = "slurm" if slurm else "basic"
     step_log = StepLog(command="regression", mode=mode)

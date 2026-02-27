@@ -25,7 +25,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, AsyncIterator
 
-from qa_agent.output import Spinner, print_banner, print_error, print_success, render_line, dim
+from qa_agent.output import print_header, print_footer, render_line, dim, console
 from qa_agent.providers import ProviderRequest
 
 if TYPE_CHECKING:
@@ -35,9 +35,16 @@ if TYPE_CHECKING:
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider capability flags
 # ─────────────────────────────────────────────────────────────────────────────
-# Providers that support real agentic tool calls (Glob, Read) via their SDK.
-# For all others we read the files ourselves and inline the content.
-_AGENTIC_PROVIDERS = {"claude"}
+# ⚠ SECURITY: No providers are granted direct filesystem access via SDK tools.
+# All file content is collected by this module (the Python agent) and inlined
+# into the prompt. This ensures the AI model only ever sees files that the
+# orchestrator explicitly chooses to send — it cannot glob, read, or traverse
+# the disk on its own.
+#
+# Previously "claude" was listed here to use its Glob + Read tools, but that
+# granted the model unbounded read access to the filesystem from agent_cwd.
+# All providers now use the inline (non-agentic) path exclusively.
+_AGENTIC_PROVIDERS: set[str] = set()  # intentionally empty — see note above
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -338,11 +345,12 @@ async def _run_async(
     request = _build_request(cwd, abs_paths, provider_name=provider_name, verbose=verbose)
 
     log.event("provider_selected", provider=provider_name)
-    print_banner(label, provider.PROVIDER_NAME)
 
-    with Spinner(f"Analysing with {provider.PROVIDER_NAME}"):
-        # We need the first token before exiting the spinner.
-        # Collect first chunk then let the rest stream normally.
+    subtitle = f"{provider.PROVIDER_NAME}  ·  {label}"
+    print_header("summarise", subtitle)
+
+    with console.status(f"Analysing with {provider.PROVIDER_NAME}...", spinner="dots"):
+        # Collect first chunk inside the spinner then stream the rest
         gen = provider.stream(request)
         first_chunk = None
         async for chunk in gen:
@@ -371,7 +379,7 @@ async def _run_async(
             render_line(buffer)
 
     log.event("stream_complete")
-    print_success()
+    print_footer("Summary complete.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

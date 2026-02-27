@@ -9,8 +9,8 @@ High-level overview. For per-command implementation detail, see [`IMPLEMENTATION
 | Field | Value |
 |-------|-------|
 | **Project** | marquee-agents |
-| **Purpose** | Automate post-regression triage for DV engineers |
-| **Audience** | DV (Development / Validation) engineers on the server team |
+| **Purpose** | Automate DV regression runs and post-regression failure triage for DV engineers |
+| **Audience** | DV (Design Verification) engineers on the server team |
 | **Type** | Python CLI tool |
 | **Entry-point** | `qa-agent` (registered via `pyproject.toml`) |
 | **Language** | Python ≥ 3.10 |
@@ -20,9 +20,14 @@ High-level overview. For per-command implementation detail, see [`IMPLEMENTATION
 
 ## The Problem Being Solved
 
-After every regression run, DV engineers must manually triage failures — finding
-configs, seeds, re-running debug scripts, and correlating logs. For 10+ failures
-this takes hours. `qa-agent` automates the mechanical parts.
+`qa-agent` automates the full mechanical DV regression workflow:
+
+1. **Regression** (`qa-agent regression`) — sources the shell environment, locates filelist/config files, runs basic or Slurm regressions with live output, and captures a timestamped log.
+2. **Triage** (`qa-agent analyse`) — parses results files, reconstructs configs + seeds for every failure, re-runs debug scripts in isolated subdirs, and writes a grouped Markdown QA report.
+3. **AI summarisation** (`qa-agent summarise`) — sends source files to Claude, OpenAI, or Gemini for structured explanation. *Available now.*
+4. **AI-driven triage** — automated root-cause correlation and natural-language report generation. *On the roadmap.*
+
+For 10+ failures this turns hours of mechanical work into a single command.
 
 ---
 
@@ -37,7 +42,7 @@ marquee-agents/
 │   ├── regression.md            # `qa-agent regression` — regression run lifecycle
 │   ├── help_and_hello.md        # `qa-agent hello` / `qa-agent guide` — welcome screen + user guides
 │   ├── logging.md               # Session logging — format, rotation, crash capture
-│   ├── ux_improvements.md       # output.py, errors.py, spinner, flags
+│   ├── cli_consistency.md       # CLI flag + output consistency plan (tasks + conventions)
 │   ├── debug_mode.md            # step-through debug mode — step_gate, StepLog, log files
 │   ├── claude_sdk.md            # Claude provider — auth, SDK options, error types
 │   ├── openai_sdk.md            # OpenAI provider — auth, API details, error types

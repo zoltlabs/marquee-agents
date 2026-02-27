@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from qa_agent.output import bold, cyan, dim
+from qa_agent.output import bold, cyan, dim, print_header
 
 
 # ── Guide body content ───────────────────────────────────────────────────────
@@ -109,19 +109,25 @@ _DOCTOR_BODY = """\
 """
 
 _OVERVIEW_BODY = """\
+  qa-agent automates the mechanical work in a DV regression workflow:
+
+    1. Run a regression      →  qa-agent regression
+    2. Triage the failures   →  qa-agent analyse
+    3. AI code summaries     →  qa-agent summarise   (Claude / OpenAI / Gemini)
+
   Commands:
 
-    regression   Run a full regression (basic or slurm)
-    analyse      Parse failures, re-run debug, generate QA report
-    summarise    Summarise files or directories using AI
-    doctor       Check environment setup (SDKs, API keys, logs)
-    hello        Welcome screen and quick start info
-    guide        This command — short user guides
+    regression   Source env, run regression (basic or slurm), capture log
+    analyse      Parse results file, re-run failed tests, generate QA report
+    summarise    Summarise files / directories using an AI provider
+    doctor       Check environment: SDKs, API keys, Python version
+    hello        Welcome screen and quick start
+    guide        This command — short practical guides
 
   Global flags (work with any command):
 
     --verbose, -v    Detailed output + full tracebacks
-    --debug          Verbose + session log + step-through for regression/analyse
+    --debug          Verbose + session log + step-through on regression/analyse
     --version, -V    Print version and exit
 
   Usage:  qa-agent guide <command>   for a detailed guide.
@@ -156,14 +162,8 @@ GUIDES: dict[str, tuple[str, str, str]] = {
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
 def _print_guide_panel(title: str, one_liner: str) -> None:
-    """Print the header panel for a guide."""
-    width = 54
-    dashes = max(1, width - len(title) - 3)
-    print()
-    print(cyan(f"\u256d\u2500 {title} " + "\u2500" * dashes + "\u256e"))
-    print(cyan("\u2502") + f"  {one_liner:<{width}}" + cyan("\u2502"))
-    print(cyan("\u2570" + "\u2500" * (width + 2) + "\u256f"))
-    print()
+    """Print the header panel for a guide using the shared print_header."""
+    print_header(title.replace("qa-agent ", ""), one_liner)
 
 
 def _print_body(body: str) -> None:

@@ -14,8 +14,6 @@ import hashlib
 import re
 import subprocess
 import sys
-import termios
-import tty
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from qa_agent.errors import PathError, QAAgentError
-from qa_agent.output import bold, cyan, dim, green, red, rule, yellow
+from qa_agent.output import bold, cyan, dim, green, red, rule, yellow, print_header, arrow_select
 from qa_agent.step_gate import StepLog, step_gate, write_log
 
 # ── Default script ────────────────────────────────────────────────────────────
@@ -210,62 +208,6 @@ def _parse(path: Path) -> tuple[list[TestResult], list[TestResult]]:
     return passed, failed
 
 
-# ── Interactive arrow-key selector ────────────────────────────────────────────
-
-def _arrow_select(prompt: str, options: list[tuple[str, str]]) -> int:
-    """Arrow-key interactive selector (TTY only).
-
-    options: list of (label, tag) tuples — tag shown in brackets.
-    Returns the chosen index.
-    Falls back to index 0 if not a TTY.
-    """
-    if not sys.stdin.isatty() or not options:
-        return 0
-
-    selected = 0
-    n = len(options)
-
-    print(f"\n  {prompt}\n")
-
-    def _render(sel: int) -> None:
-        # Move cursor up to overwrite previous render (n lines)
-        sys.stdout.write(f"\033[{n}A")
-        for i, (label, tag) in enumerate(options):
-            prefix = f"  {cyan('❯')}  " if i == sel else "     "
-            tag_str = dim(f"[{tag}]")
-            sys.stdout.write(f"\r{prefix}{bold(label) if i == sel else label}  {tag_str}\n")
-        sys.stdout.flush()
-
-    # Initial render
-    for i, (label, tag) in enumerate(options):
-        prefix = f"  {cyan('❯')}  " if i == 0 else "     "
-        tag_str = dim(f"[{tag}]")
-        print(f"{prefix}{bold(label) if i == 0 else label}  {tag_str}")
-
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        while True:
-            ch = sys.stdin.read(1)
-            if ch == "\r" or ch == "\n":
-                break
-            elif ch == "\x1b":
-                seq = sys.stdin.read(2)
-                if seq == "[A":    # up
-                    selected = (selected - 1) % n
-                elif seq == "[B":  # down
-                    selected = (selected + 1) % n
-                _render(selected)
-            elif ch == "\x03":     # Ctrl-C
-                raise KeyboardInterrupt
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    # Print a blank line after selection
-    print()
-    return selected
-
 
 # ── Source file discovery & selection (Step 3) ────────────────────────────────
 
@@ -311,7 +253,7 @@ def _select_source_file(working_dir: Path, package_dir: Path) -> Optional[Path]:
         return path
 
     options = [(p.name, tag) for p, tag in candidates]
-    idx = _arrow_select("Select a source file to use (↑/↓ arrow keys, Enter to confirm):", options)
+    idx = arrow_select("Select a source file to use (↑/↓ arrow keys, Enter to confirm):", options)
     chosen_path = candidates[idx][0]
     print(f"  {green('✓')}  Using source file: {chosen_path}")
     return chosen_path
@@ -374,7 +316,7 @@ def _select_script(script_flag: str, working_dir: Path, package_dir: Path) -> st
         return str(path)
 
     options = [(p.name, tag) for p, tag in candidates]
-    idx = _arrow_select("Select a debug script (↑/↓ arrow keys, Enter to confirm):", options)
+    idx = arrow_select("Select a debug script (↑/↓ arrow keys, Enter to confirm):", options)
     chosen_path = candidates[idx][0]
     print(f"  {green('✓')}  Using script: {chosen_path}")
     return str(chosen_path)
@@ -618,6 +560,8 @@ def run(
 ) -> None:
     wd = Path(working_dir).resolve()
     package_dir = Path(__file__).parent  # qa_agent/
+
+    print_header("analyse", f"Mode: {mode or 'auto-detect'}")
 
     effective_mode = "basic"  # will be set during parsing
     step_log = StepLog(command="analyse", mode="basic")

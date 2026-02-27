@@ -63,7 +63,7 @@ def handle_exception(
     Returns:
         An integer exit code (caller should pass to sys.exit).
     """
-    from qa_agent.output import print_error, yellow
+    from qa_agent.output import print_rich_error, yellow
 
     # ── Write to session log if one is active ────────────────────────────────
     if log is not None:
@@ -87,22 +87,22 @@ def handle_exception(
         msg = str(exc)
         if tip:
             msg = f"{msg}\n{tip}"
-        print_error(msg)
+        print_rich_error(msg)
         return 1
 
     if isinstance(exc, ProviderConnectionError):
-        print_error(str(exc))
+        print_rich_error(str(exc))
         return 1
 
     if isinstance(exc, QAAgentError):
-        print_error(str(exc))
+        print_rich_error(str(exc))
         return exc.exit_code
 
     # ── Claude Agent SDK errors (duck-typed to avoid hard import) ─────────────
     exc_type_name = type(exc).__name__
 
     if exc_type_name == "CLINotFoundError":
-        print_error(
+        print_rich_error(
             "Claude Code CLI not found.\n"
             "  Install: npm install -g @anthropic-ai/claude-code\n"
             "  Or set:  ANTHROPIC_API_KEY=sk-ant-..."
@@ -110,21 +110,21 @@ def handle_exception(
         return 1
 
     if exc_type_name == "CLIConnectionError":
-        print_error(f"Connection to Claude Code failed.\n  {exc}")
+        print_rich_error(f"Connection to Claude Code failed.\n  {exc}")
         return 1
 
     if exc_type_name == "ProcessError":
         exit_code = getattr(exc, "exit_code", 1)
-        print_error(f"Agent process failed (exit {exit_code}).\n  {exc}")
+        print_rich_error(f"Agent process failed (exit {exit_code}).\n  {exc}")
         return 1
 
     if exc_type_name == "CLIJSONDecodeError":
-        print_error(f"Unexpected SDK response.\n  {exc}")
+        print_rich_error(f"Unexpected SDK response.\n  {exc}")
         return 1
 
     # ── Generic runtime errors ────────────────────────────────────────────────
     if isinstance(exc, RuntimeError):
-        print_error(str(exc))
+        print_rich_error(str(exc))
         return 1
 
     # ── Catch-all — unexpected error ──────────────────────────────────────────
@@ -134,7 +134,7 @@ def handle_exception(
             log_hint = f"\n  Session log: {log.path}"
         except AttributeError:
             pass
-    print_error(
+    print_rich_error(
         f"Unexpected error: {type(exc).__name__}: {exc}"
         + (log_hint or "\n  Re-run with --verbose for a full traceback.")
     )

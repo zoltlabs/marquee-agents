@@ -21,7 +21,8 @@ from enum import Enum
 from typing import Callable
 
 from qa_agent.output import (
-    bold, cyan, dim, green, red, yellow, print_doctor_banner, rule,
+    bold, cyan, dim, green, red, yellow, rule,
+    print_header, render_doctor_table, console,
 )
 
 
@@ -269,7 +270,6 @@ def check_log_dir() -> list[CheckResult]:
 SECTIONS: list[tuple[str, list[Callable[[], list[CheckResult]]]]] = [
     ("Runtime",    [check_python_version]),
     ("Providers",  [check_claude, check_openai, check_gemini]),
-    ("Log system", [check_log_dir]),
 ]
 
 
@@ -286,37 +286,38 @@ def _status_icon(status: Status) -> str:
 
 
 def _print_section(title: str, results: list[CheckResult], verbose: bool) -> tuple[int, int]:
-    """Print one section; return (errors, warnings) counts."""
+    """Print one section as a rich table; return (errors, warnings) counts."""
     errors = warnings = 0
-    print(f"  {bold(title)}")
+
+    # Optionally append raw values to detail when verbose
+    display_results: list[CheckResult] = []
     for r in results:
-        icon = _status_icon(r.status)
-        label_field = f"{r.label:<30}" if len(r.label) < 30 else r.label
-        raw_suffix = f"  {dim(r.raw)}" if verbose and r.raw else ""
-        print(f"    {icon}  {label_field}  {dim(r.detail)}{raw_suffix}")
-        if r.fix:
-            for fix_line in r.fix.splitlines():
-                print(f"          {cyan('→')} {fix_line}")
+        if verbose and r.raw:
+            import dataclasses
+            r = dataclasses.replace(r, detail=f"{r.detail}  [{r.raw}]")
+        display_results.append(r)
         if r.status == Status.ERROR:
             errors += 1
         elif r.status == Status.WARN:
             warnings += 1
-    print()
+
+    render_doctor_table(title, display_results)
     return errors, warnings
 
 
 def _print_summary(errors: int, warnings: int) -> None:
-    print(rule())
+    from rich.text import Text
     parts: list[str] = []
     if errors:
-        parts.append(red(f"{errors} error{'s' if errors != 1 else ''}"))
+        parts.append(f"[bold red]{errors} error{'s' if errors != 1 else ''}[/]")
     if warnings:
-        parts.append(yellow(f"{warnings} warning{'s' if warnings != 1 else ''}"))
+        parts.append(f"[bold yellow]{warnings} warning{'s' if warnings != 1 else ''}[/]")
     if not parts:
-        parts.append(green("all checks passed"))
-    print(f"  {' · '.join(parts)}")
-    print(rule())
-    print()
+        parts.append("[bold green]all checks passed[/]")
+    console.rule(style="dim bright_cyan")
+    console.print(f"  {' · '.join(parts)}", markup=True)
+    console.rule(style="dim bright_cyan")
+    console.print()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -325,7 +326,7 @@ def _print_summary(errors: int, warnings: int) -> None:
 
 def run(verbose: bool = False) -> None:
     """Entry point called from cli.py."""
-    print_doctor_banner()
+    print_header("doctor", "environment health check")
 
     total_errors = total_warnings = 0
 

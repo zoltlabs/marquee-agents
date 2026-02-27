@@ -10,6 +10,7 @@ dependencies = [
     "google-genai",
     "python-dotenv",
     "platformdirs",
+    "rich>=13.0",
 ]
 
 [project.scripts]
