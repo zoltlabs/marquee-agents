@@ -3,6 +3,9 @@
 Parse a regression results .doc file, detect failures, run debug commands
 per failure, capture logs, and write a grouped Markdown QA report.
 No AI — pure Python.
+
+Debug mode (--debug): wraps each pipeline step in a step_gate that pauses
+for user confirmation and writes a timestamped log file to cwd.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from typing import Optional
 
 from qa_agent.errors import PathError, QAAgentError
 from qa_agent.output import bold, cyan, dim, green, red, rule, yellow
+from qa_agent.step_gate import StepLog, step_gate, write_log
 
 # ── Default script ────────────────────────────────────────────────────────────
 
@@ -609,39 +613,76 @@ def run(
     script: str = "",
     test_filter: str | None = None,
     verbose: bool = False,
+    debug: bool = False,
+    log: object = None,
 ) -> None:
     wd = Path(working_dir).resolve()
     package_dir = Path(__file__).parent  # qa_agent/
 
+    effective_mode = "basic"  # will be set during parsing
+    step_log = StepLog(command="analyse", mode="basic")
+
+    results_path: Optional[Path] = None
+    passed: list[TestResult] = []
+    failed: list[TestResult] = []
+    source_file: Optional[Path] = None
+    effective_script: str = ""
+    debug_dirs: dict[TestResult, Path] = {}
+    outcomes: list[DebugOutcome] = []
+    report_path: Optional[Path] = None
+
     # ── Step 1: find and read results file ────────────────────────────────────
-    results_path = _find_results(wd)   # raises PathError if not found
+    with step_gate(1, "Read results file", debug, step_log) as ctx:
+        results_path = _find_results(wd)
+        ctx.detail = f"Path: {results_path}"
+    if not ctx.ok:
+        log_path = write_log(step_log, wd)
+        print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+        return
+
     print(f"\n  {green('✓')}  Reading results from: {results_path}")
 
     # ── Step 2: detect mode & parse ───────────────────────────────────────────
-    effective_mode = mode or _detect_mode(results_path.name)
-    passed, failed = _parse(results_path)
-    total = len(passed) + len(failed)
+    with step_gate(2, "Parse results", debug, step_log) as ctx:
+        effective_mode = mode or _detect_mode(results_path.name)
+        step_log.mode = effective_mode
+        passed, failed = _parse(results_path)
+        total = len(passed) + len(failed)
 
-    if total == 0:
-        raise QAAgentError(
-            f"No recognisable test result lines found in '{results_path}'.\n"
-            "Check that the file follows the expected format."
-        )
-
-    # ── --test filter ─────────────────────────────────────────────────────────
-    if test_filter:
-        filtered = [r for r in failed if r.test == test_filter]
-        if not filtered:
-            available = ", ".join(sorted({r.test for r in failed})) or "(none)"
-            raise QAAgentError(
-                f"No failed test named '{test_filter}' found in '{results_path}'.\n"
-                f"  Failing tests: {available}"
+        if total == 0:
+            ctx.fail(
+                f"No recognisable test result lines found in '{results_path}'.\n"
+                "Check that the file follows the expected format."
             )
-        skipped = len(failed) - len(filtered)
-        failed = filtered
+        else:
+            ctx.detail = f"Passed: {len(passed)} | Failed: {len(failed)}"
+    if not ctx.ok:
+        log_path = write_log(step_log, wd)
+        print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+        raise QAAgentError(ctx.error)
+
+    # ── Step 3: --test filter (optional) ─────────────────────────────────────
+    if test_filter:
+        with step_gate(3, f"Filter by test '{test_filter}'", debug, step_log) as ctx:
+            filtered = [r for r in failed if r.test == test_filter]
+            if not filtered:
+                available = ", ".join(sorted({r.test for r in failed})) or "(none)"
+                ctx.fail(
+                    f"No failed test named '{test_filter}' found.\n"
+                    f"  Failing tests: {available}"
+                )
+            else:
+                skipped = len(failed) - len(filtered)
+                failed = filtered
+                ctx.detail = f"Matched: {len(filtered)}, skipped: {skipped}"
+        if not ctx.ok:
+            log_path = write_log(step_log, wd)
+            print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+            raise QAAgentError(ctx.error)
+
         print(f"  {yellow('⚑')}  --test filter active: "
               f"focusing on '{bold(test_filter)}' "
-              f"{dim(f'({skipped} other failure(s) skipped)')}")
+              f"{dim(f'({len(failed)} match(es))')}")
 
     # Banner
     print()
@@ -657,33 +698,69 @@ def run(
     unique_failing = len({r.test for r in failed})
     print(f"\n  Found {bold(str(len(failed)))} failed test(s) across {bold(str(unique_failing))} unique test name(s).\n")
 
-    # ── Step 3: source file selection ─────────────────────────────────────────
-    source_file = _select_source_file(wd, package_dir)
+    # ── Step 4: source file selection ─────────────────────────────────────────
+    step_offset = 1 if test_filter else 0
+    with step_gate(3 + step_offset, "Select source file", debug, step_log) as ctx:
+        source_file = _select_source_file(wd, package_dir)
+        if source_file:
+            ctx.detail = f"Selected: {source_file.name}"
+        else:
+            ctx.detail = "(none — env will not be pre-configured)"
+        # non-fatal: always ok
+    if not ctx.ok:
+        log_path = write_log(step_log, wd)
+        print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+        return
 
-    # ── Step 4: script file selection ─────────────────────────────────────────
-    effective_script = _select_script(script, wd, package_dir)
+    # ── Step 5: script file selection ─────────────────────────────────────────
+    with step_gate(4 + step_offset, "Select debug script", debug, step_log) as ctx:
+        effective_script = _select_script(script, wd, package_dir)
+        if effective_script:
+            ctx.detail = f"Selected: {effective_script}"
+        else:
+            ctx.detail = "(none — debug commands written to report only)"
+        # non-fatal: always ok
+    if not ctx.ok:
+        log_path = write_log(step_log, wd)
+        print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+        return
 
-    # ── Step 5: create per-failure debug subdirectories ───────────────────────
+    # ── Step 6: create debug directories ──────────────────────────────────────
     if failed:
-        print()
-        debug_dirs = _create_debug_dirs(failed, wd, verbose=verbose)
+        with step_gate(5 + step_offset, "Create debug directories", debug, step_log) as ctx:
+            print()
+            debug_dirs = _create_debug_dirs(failed, wd, verbose=verbose)
+            ctx.detail = f"Created: {len(debug_dirs)} directories"
+        if not ctx.ok:
+            log_path = write_log(step_log, wd)
+            print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+            return
     else:
         debug_dirs = {}
 
-    # ── Step 6: run debug commands + capture logs ─────────────────────────────
-    outcomes: list[DebugOutcome] = []
+    # ── Step 7: run debug commands ─────────────────────────────────────────────
     if failed:
         print()
         print(rule())
         print(f"  {cyan('Running debug commands')}  {dim(f'({len(failed)} failure(s))')}")
         print(rule())
         print()
+
         for i, result in enumerate(failed, 1):
-            outcome = _run_debug(
-                result, debug_dirs[result], effective_script, source_file, i, len(failed),
-                verbose=verbose,
-            )
+            step_title = f"Debug [{i}/{len(failed)}] {result.test} seed={result.seed}"
+            with step_gate(6 + step_offset + (i - 1), step_title, debug, step_log) as ctx:
+                outcome = _run_debug(
+                    result, debug_dirs[result], effective_script, source_file, i, len(failed),
+                    verbose=verbose,
+                )
+                ctx.detail = f"exit={outcome.exit_code}"
+                if outcome.timed_out:
+                    ctx.fail("Timed out after 2h")
+                elif outcome.exit_code is not None and outcome.exit_code != 0:
+                    ctx.detail += " (non-zero, captured in report)"
+                    # NOT fatal — debug run errors are expected and captured in report
             outcomes.append(outcome)
+
         print()
         print(rule())
         print(
@@ -694,22 +771,37 @@ def run(
         )
         print(rule())
     else:
-        print(f"\n  {green('✓')} All {total} test(s) passed.\n")
+        print(f"\n  {green('✓')} All {len(passed)} test(s) passed.\n")
 
-    # ── Step 7: write report ──────────────────────────────────────────────────
+    # ── Step 8: write report ───────────────────────────────────────────────────
+    report_step_num = 6 + step_offset + len(failed) if failed else 6 + step_offset
     now = datetime.now()
     report_path = (
         Path(output) if output
         else Path.cwd() / f"qa_report_{now.strftime('%Y%m%d_%H%M%S')}.md"
     )
-    _write_report(
-        path=report_path,
-        results_path=results_path,
-        mode=effective_mode,
-        working_dir=wd,
-        passed=passed,
-        outcomes=outcomes,
-        script=effective_script,
-        now=now,
-    )
+
+    with step_gate(report_step_num, "Write report", debug, step_log) as ctx:
+        _write_report(
+            path=report_path,
+            results_path=results_path,
+            mode=effective_mode,
+            working_dir=wd,
+            passed=passed,
+            outcomes=outcomes,
+            script=effective_script,
+            now=now,
+        )
+        ctx.detail = f"Path: {report_path.resolve()}"
+    if not ctx.ok:
+        log_path = write_log(step_log, wd)
+        print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+        return
+
     print(f"\n  {green('✓')}  Report written to: {report_path.resolve()}\n")
+
+    # ── Write step log in debug mode or on failure ─────────────────────────────
+    has_failure = any(s.status == "FAILED" for s in step_log.steps)
+    if debug or has_failure:
+        step_log_path = write_log(step_log, wd)
+        print(f"  {cyan('ℹ')}  Step log: {step_log_path}\n")

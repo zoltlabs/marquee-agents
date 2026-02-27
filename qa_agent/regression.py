@@ -7,6 +7,9 @@ Automate the full regression run lifecycle:
   4. Basic: locate + run the regression Python script; verify results.doc
   5. Slurm: locate config.txt + run_questa.sh + slurm script; verify results_new.doc
   6. Print a summary block
+
+Debug mode (--debug): wraps each step in a step_gate that pauses for user
+confirmation between steps and writes a timestamped log file to cwd.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from qa_agent.output import (
     bold, cyan, dim, green, red, rule, yellow,
     print_regression_banner, Spinner,
 )
+from qa_agent.step_gate import StepLog, step_gate, write_log
 
 # ── Package / repo root ────────────────────────────────────────────────────────
 
@@ -328,10 +332,10 @@ def _run_regression(
     source_file: Optional[Path],
     slurm: bool,
     verbose: bool = False,
-) -> tuple[int, Path]:
+) -> tuple[int, Path, str]:
     """Execute the regression command, streaming stdout to terminal + log file.
 
-    Returns (exit_code, log_path).
+    Returns (exit_code, log_path, captured_output).
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     mode_label = "slurm" if slurm else "basic"
@@ -351,6 +355,7 @@ def _run_regression(
     print()
 
     exit_code = 0
+    captured_lines: list[str] = []
     try:
         with open(log_path, "w", encoding="utf-8") as log_file:
             proc = subprocess.Popen(
@@ -364,12 +369,13 @@ def _run_regression(
             for line in proc.stdout:
                 sys.stdout.write(line)
                 log_file.write(line)
+                captured_lines.append(line.rstrip())
             proc.wait()
             exit_code = proc.returncode
     except Exception as exc:
         raise QAAgentError(f"Regression failed to start: {exc}") from exc
 
-    return exit_code, log_path
+    return exit_code, log_path, "\n".join(captured_lines)
 
 
 # ── Verify results ─────────────────────────────────────────────────────────────
@@ -427,42 +433,94 @@ def _print_summary(
 def run(
     slurm: bool = False,
     verbose: bool = False,
+    debug: bool = False,
     log: object = None,
 ) -> None:
     """Main entry-point called from cli.py."""
     print_regression_banner("slurm" if slurm else "basic")
 
-    # ── Step 1: source file ────────────────────────────────────────────────────
-    source_file = _select_source_file()
+    mode = "slurm" if slurm else "basic"
+    step_log = StepLog(command="regression", mode=mode)
 
-    # ── Step 2: filelist.txt ───────────────────────────────────────────────────
-    filelist = _locate_filelist()
-    if filelist is None:
-        return  # user declined — clean exit
-
-    # ── Step 3: mode gate ──────────────────────────────────────────────────────
+    source_file: Optional[Path] = None
+    filelist: Optional[Path] = None
     config: Optional[Path] = None
     run_questa: Optional[Path] = None
+    regression_script: Optional[Path] = None
+    exec_log_path: Optional[Path] = None
+    result_status: str = ""
+
+    # ── Step 1: source file ────────────────────────────────────────────────────
+    with step_gate(1, "Source environment", debug, step_log) as ctx:
+        source_file = _select_source_file()
+        if source_file:
+            ctx.detail = f"File: {source_file.name}"
+        else:
+            ctx.detail = "(none — environment will not be pre-configured)"
+    if not ctx.ok:
+        log_path = write_log(step_log, Path.cwd())
+        print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+        return
+
+    # ── Step 2: filelist.txt ───────────────────────────────────────────────────
+    with step_gate(2, "Locate filelist", debug, step_log) as ctx:
+        filelist = _locate_filelist()
+        if filelist is None:
+            ctx.fail("filelist.txt not found and user declined bundled default")
+        else:
+            ctx.detail = f"Found: {filelist.name}"
+    if not ctx.ok:
+        log_path = write_log(step_log, Path.cwd())
+        print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+        return
 
     if slurm:
-        # ── Step 5a: config.txt ────────────────────────────────────────────────
-        config = _locate_config()
-        if config is None:
-            return  # user declined
+        # ── Step 3: config.txt (slurm) ─────────────────────────────────────────
+        with step_gate(3, "Locate config.txt", debug, step_log) as ctx:
+            config = _locate_config()
+            if config is None:
+                ctx.fail("config.txt not found and user declined bundled default")
+            else:
+                ctx.detail = f"Found: {config.name}"
+        if not ctx.ok:
+            log_path = write_log(step_log, Path.cwd())
+            print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+            return
 
-        # ── Step 5b: run_questa.sh ─────────────────────────────────────────────
-        run_questa = _locate_run_questa()
+        # ── Step 4: run_questa.sh (slurm) ──────────────────────────────────────
+        with step_gate(4, "Locate run_questa.sh", debug, step_log) as ctx:
+            run_questa = _locate_run_questa()
+            ctx.detail = f"Found: {run_questa.name}"
+            # Ensure executable
+            if not os.access(str(run_questa), os.X_OK):
+                os.chmod(str(run_questa), os.stat(str(run_questa)).st_mode | 0o111)
+                print(f"  {cyan('ℹ')}  Made {run_questa.name} executable")
+        if not ctx.ok:
+            log_path = write_log(step_log, Path.cwd())
+            print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+            return
 
-        # Ensure run_questa.sh is executable
-        if not os.access(str(run_questa), os.X_OK):
-            os.chmod(str(run_questa), os.stat(str(run_questa)).st_mode | 0o111)
-            print(f"  {cyan('ℹ')}  Made {run_questa.name} executable")
+        # ── Step 5: slurm regression script ────────────────────────────────────
+        with step_gate(5, "Select regression script", debug, step_log) as ctx:
+            regression_script = _select_regression_py(slurm=True)
+            ctx.detail = f"Selected: {regression_script.name}"
+        if not ctx.ok:
+            log_path = write_log(step_log, Path.cwd())
+            print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+            return
 
-        # ── Step 5c: slurm regression script ──────────────────────────────────
-        regression_script = _select_regression_py(slurm=True)
+        exec_step_num = 6
     else:
-        # ── Step 4a: basic regression script ──────────────────────────────────
-        regression_script = _select_regression_py(slurm=False)
+        # ── Step 3: basic regression script ────────────────────────────────────
+        with step_gate(3, "Select regression script", debug, step_log) as ctx:
+            regression_script = _select_regression_py(slurm=False)
+            ctx.detail = f"Selected: {regression_script.name}"
+        if not ctx.ok:
+            log_path = write_log(step_log, Path.cwd())
+            print(f"\n  {cyan('ℹ')}  Log: {log_path}")
+            return
+
+        exec_step_num = 4
 
     # ── Build command ──────────────────────────────────────────────────────────
     cmd = _build_command(
@@ -476,7 +534,6 @@ def run(
     if verbose:
         print(f"\n  {dim('Full command:')} {' '.join(str(c) for c in cmd)}")
 
-    # ── Run ────────────────────────────────────────────────────────────────────
     print()
     print(rule())
     mode_label = "Slurm" if slurm else "Basic"
@@ -484,10 +541,35 @@ def run(
     print(rule())
     print()
 
-    exit_code, log_path = _run_regression(cmd, source_file, slurm=slurm, verbose=verbose)
+    # ── Step exec_step_num: Execute regression ─────────────────────────────────
+    exec_exit_code = 0
+    with step_gate(exec_step_num, "Execute regression", debug, step_log) as ctx:
+        exec_exit_code, exec_log_path, captured = _run_regression(
+            cmd, source_file, slurm=slurm, verbose=verbose
+        )
+        ctx.detail = f"Command: {' '.join(str(c) for c in cmd)}"
+        ctx.output = captured
+        if exec_exit_code != 0:
+            ctx.fail(f"Exit code: {exec_exit_code}")
+    if not ctx.ok and exec_exit_code != 0:
+        has_failure = True
+        if debug or True:  # always write on failure
+            log_path = write_log(step_log, Path.cwd())
+            print(f"\n  {cyan('ℹ')}  Step log: {log_path}")
 
-    # ── Verify ─────────────────────────────────────────────────────────────────
-    result_status = _verify_results(exit_code, log_path, slurm=slurm)
+    # ── Step exec_step_num+1: Verify results ───────────────────────────────────
+    verify_step_num = exec_step_num + 1
+    with step_gate(verify_step_num, "Verify results", debug, step_log) as ctx:
+        result_status = _verify_results(exec_exit_code, exec_log_path, slurm=slurm)
+        results_file = "results_new.doc" if slurm else "results.doc"
+        results_path = Path.cwd() / results_file
+        if not results_path.exists() and exec_exit_code == 0:
+            ctx.detail = f"{results_file} not generated"
+        elif results_path.exists():
+            ctx.detail = f"{results_file} present"
+        # verify step is non-fatal — never fail ctx here
+
+    # Print original result status line
     print()
     print(f"  {result_status}")
 
@@ -497,8 +579,14 @@ def run(
         regression_script=regression_script,
         filelist=filelist,
         source_file=source_file,
-        log_path=log_path,
+        log_path=exec_log_path,
         result_status=result_status,
         config=config,
         run_questa=run_questa,
     )
+
+    # ── Write step log in debug mode or on failure ─────────────────────────────
+    has_failure = any(s.status == "FAILED" for s in step_log.steps)
+    if debug or has_failure:
+        step_log_path = write_log(step_log, Path.cwd())
+        print(f"  {cyan('ℹ')}  Step log: {step_log_path}\n")

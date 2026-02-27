@@ -37,6 +37,7 @@ marquee-agents/
 │   ├── regression.md            # `qa-agent regression` — regression run lifecycle
 │   ├── logging.md               # Session logging — format, rotation, crash capture
 │   ├── ux_improvements.md       # output.py, errors.py, spinner, flags
+│   ├── debug_mode.md            # step-through debug mode — step_gate, StepLog, log files
 │   ├── claude_sdk.md            # Claude provider — auth, SDK options, error types
 │   ├── openai_sdk.md            # OpenAI provider — auth, API details, error types
 │   └── gemini_sdk.md            # Gemini provider — auth, API details, error types
@@ -47,6 +48,7 @@ marquee-agents/
 │   ├── output.py                # Shared ANSI rendering: colour helpers, banner, Spinner
 │   ├── errors.py                # Error taxonomy (QAAgentError hierarchy) + central handler
 │   ├── session_log.py           # Structured session logging (JSON Lines, gzip, rotation)
+│   ├── step_gate.py             # Step-through debug gate: StepLog, StepRecord, step_gate()
 │   ├── summarise.py             # Orchestrator: prompt building, output formatting, provider routing
 │   ├── analyse.py               # Regression results parser + Markdown QA report writer
 │   ├── doctor.py                # Environment health checker: SDKs, auth, log dir
@@ -86,7 +88,7 @@ marquee-agents/
 | Flag | Short | Default | Effect |
 |------|-------|---------|--------|
 | `--verbose` | `-v` | off | Detailed progress, raw provider output, full tracebacks |
-| `--debug` | — | off | `--verbose` + write session log to disk |
+| `--debug` | — | off | `--verbose` + write session log to disk + step-through gate on `regression`/`analyse` |
 | `--version` | `-V` | — | Print `qa-agent <version>` and exit |
 
 ---

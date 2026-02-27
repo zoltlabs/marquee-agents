@@ -207,6 +207,8 @@ def main() -> None:
                 script=args.script,
                 test_filter=args.test,
                 verbose=args.verbose,
+                debug=args.debug,
+                log=log,
             )
 
         elif args.command == "regression":
@@ -214,6 +216,7 @@ def main() -> None:
             regression_run(
                 slurm=args.slurm,
                 verbose=args.verbose,
+                debug=args.debug,
                 log=log,
             )
 

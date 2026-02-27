@@ -177,7 +177,7 @@ qa-agent <command> [options]
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--verbose` | `-v` | Show detailed progress, raw provider output, and full tracebacks |
-| `--debug` | — | `--verbose` + write a session log to disk for debugging |
+| `--debug` | — | `--verbose` + write a session log to disk + step-through gate on `regression`/`analyse` |
 | `--version` | `-V` | Print version and exit |
 
 ---
@@ -277,6 +277,9 @@ qa-agent analyse --test apcit_cpl_out_order
 # Print detailed progress: full debug commands + absolute paths
 qa-agent analyse --verbose
 
+# Step-through debug mode: pause after each step (and each debug run), write timestamped log
+qa-agent --debug analyse
+
 # Combine options
 qa-agent analyse --working-dir /path/to/run --output report.md -s /tools/run_debug.pl
 ```
@@ -314,6 +317,9 @@ qa-agent regression --slurm
 
 # Print full resolved paths and commands
 qa-agent regression --verbose
+
+# Step-through debug mode: pause after each step, write timestamped log
+qa-agent --debug regression
 ```
 
 #### Flags
