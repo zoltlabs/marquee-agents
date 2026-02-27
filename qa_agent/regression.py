@@ -26,7 +26,7 @@ from typing import Optional
 from qa_agent.errors import ConfigError, QAAgentError
 from qa_agent.output import (
     bold, cyan, dim, green, red, rule, yellow,
-    print_header, print_summary_table, arrow_select, Spinner,
+    print_header, print_summary_table, arrow_select, Spinner, stream_with_esc_monitor, confirm
 )
 from qa_agent.step_gate import StepLog, step_gate, write_log
 
@@ -43,7 +43,7 @@ def _discover_csh_files() -> list[tuple[Path, str]]:
     seen: set[Path] = set()
 
     # Bundled default
-    bundled = PACKAGE_DIR / "sourcefile_2025_3.csh"
+    bundled = PACKAGE_DIR / "scripts" / "sourcefile_2025_3.csh"
     if bundled.exists() and bundled not in seen:
         results.append((bundled, "qa-agent"))
         seen.add(bundled)
@@ -96,15 +96,10 @@ def _locate_filelist() -> Optional[Path]:
         return cwd_file
 
     # Not in cwd — prompt
-    bundled = PACKAGE_DIR / "filelist.txt"
+    bundled = PACKAGE_DIR / "scripts" / "filelist.txt"
     if bundled.exists():
-        sys.stdout.write(
-            f"  {yellow('⚠')}  No filelist.txt found in current directory."
-            f" Use the one bundled with qa-agent? [Y/n] "
-        )
-        sys.stdout.flush()
-        answer = input().strip().lower()
-        if answer in ("", "y", "yes"):
+        print(f"  {yellow('⚠')}  No filelist.txt found in current directory.")
+        if confirm("Use the one bundled with qa-agent?", default=True):
             print(f"  {green('✓')}  Using qa-agent default filelist.txt")
             return bundled
         else:
@@ -127,7 +122,7 @@ def _discover_regression_py(slurm: bool = False) -> list[tuple[Path, str]]:
 
     if slurm:
         # Bundled slurm script
-        bundled = PACKAGE_DIR / "regression_slurm_questa_2025.py"
+        bundled = PACKAGE_DIR / "scripts" / "regression_slurm_questa_2025.py"
         if bundled.exists() and bundled not in seen:
             results.append((bundled, "qa-agent"))
             seen.add(bundled)
@@ -143,7 +138,7 @@ def _discover_regression_py(slurm: bool = False) -> list[tuple[Path, str]]:
                 seen.add(p)
     else:
         # Bundled basic script
-        bundled = PACKAGE_DIR / "regression_8B_16B_questa.py"
+        bundled = PACKAGE_DIR / "scripts" / "regression_8B_16B_questa.py"
         if bundled.exists() and bundled not in seen:
             results.append((bundled, "qa-agent"))
             seen.add(bundled)
@@ -196,15 +191,10 @@ def _locate_config() -> Optional[Path]:
         print(f"  {green('✓')}  Found config.txt in cwd")
         return cwd_file
 
-    bundled = PACKAGE_DIR / "config.txt"
+    bundled = PACKAGE_DIR / "scripts" / "config.txt"
     if bundled.exists():
-        sys.stdout.write(
-            f"  {yellow('⚠')}  No config.txt found in current directory."
-            f" Use the one bundled with qa-agent? [Y/n] "
-        )
-        sys.stdout.flush()
-        answer = input().strip().lower()
-        if answer in ("", "y", "yes"):
+        print(f"  {yellow('⚠')}  No config.txt found in current directory.")
+        if confirm("Use the one bundled with qa-agent?", default=True):
             print(f"  {green('✓')}  Using qa-agent default config.txt")
             return bundled
         else:
@@ -223,7 +213,7 @@ def _locate_config() -> Optional[Path]:
 def _locate_run_questa() -> Optional[Path]:
     """Return path to run_questa.sh; interactive selector if cwd copy exists."""
     cwd_file = Path.cwd() / "run_questa.sh"
-    bundled = PACKAGE_DIR / "run_questa.sh"
+    bundled = PACKAGE_DIR / "scripts" / "run_questa.sh"
 
     candidates: list[tuple[Path, str]] = []
 
@@ -300,7 +290,7 @@ def _run_regression(
     print()
 
     exit_code = 0
-    captured_lines: list[str] = []
+    captured_text = ""
     try:
         with open(log_path, "w", encoding="utf-8") as log_file:
             proc = subprocess.Popen(
@@ -308,19 +298,16 @@ def _run_regression(
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
                 cwd=str(Path.cwd()),
+                start_new_session=True,
             )
-            for line in proc.stdout:
-                sys.stdout.write(line)
-                log_file.write(line)
-                captured_lines.append(line.rstrip())
-            proc.wait()
+            captured_text = stream_with_esc_monitor(proc, log_file, print_output=True)
+            proc.wait(timeout=7200)
             exit_code = proc.returncode
     except Exception as exc:
         raise QAAgentError(f"Regression failed to start: {exc}") from exc
 
-    return exit_code, log_path, "\n".join(captured_lines)
+    return exit_code, log_path, captured_text
 
 
 # ── Verify results ─────────────────────────────────────────────────────────────

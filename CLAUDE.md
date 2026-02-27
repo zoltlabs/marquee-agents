@@ -63,13 +63,14 @@ marquee-agents/
 │   ├── claude_provider.py       # Claude Agent SDK provider (generic; reusable across commands)
 │   ├── openai_provider.py       # OpenAI Chat Completions provider
 │   └── gemini_provider.py       # Google Gemini provider
-├── run_apci_2025.pl             # Default debug Perl script (used in generated commands)
-├── run_questa.sh                # Bundled Slurm launcher script
-├── sourcefile_2025_3.csh        # Bundled environment source file
-├── filelist.txt                 # Bundled default test filelist
-├── config.txt                   # Bundled Slurm configuration
-├── regression_8B_16B_questa.py  # Bundled basic regression runner
-├── regression_slurm_questa_2025.py  # Bundled Slurm regression runner
+├── scripts/                     # Bundled default regression/debug files
+│   ├── run_apci_2025.pl             # Default debug Perl script
+│   ├── run_questa.sh                # Bundled Slurm launcher script
+│   ├── sourcefile_2025_3.csh        # Bundled environment source file
+│   ├── filelist.txt                 # Bundled default test filelist
+│   ├── config.txt                   # Bundled Slurm configuration
+│   ├── regression_8B_16B_questa.py  # Bundled basic regression runner
+│   └── regression_slurm_questa_2025.py  # Bundled Slurm regression runner
 ├── pyproject.toml
 ├── setup.py
 ├── .gitignore

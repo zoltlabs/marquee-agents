@@ -346,7 +346,7 @@ script would have been shown/selected.
 
 ```bash
 source /path/to/sourcefile_2025_3.csh && \
-../../run_apci_2025.pl -t apcit_basic.sv -s mti64 -visualizer -debug \
+../../scripts/run_apci_2025.pl -t apcit_basic.sv -s mti64 -visualizer -debug \
   -T $SIG_PCIE_AVERY_TOP/sipc_top_ep1.sv \
   -file $SIG_PCIE_HOME/RTL/PCIeCore/sig_pcie_core_16B.f \
   -R " +define+APCI_NUM_LANES=4 +apci_gen5 +define+SIPC_GEN5 +define+SIPC_USE_NON_FLIT_MODE +define+SIPC_FASTER_MS_TICK +define+GEN3_MAX_WIDTH_4 +define+GEN4_MAX_WIDTH_4 +define+GEN5_MAX_WIDTH_4 +define+GEN6_MAX_WIDTH_8 +define+PIPE_BYTEWIDTH_16 +define+APCI_MAX_DATA_WIDTH=16 +define+GEN1_2_MAX_WIDTH_4 +licq" \

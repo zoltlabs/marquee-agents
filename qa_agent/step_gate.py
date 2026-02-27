@@ -120,7 +120,8 @@ def step_gate(
       - Caller checks ctx.ok to decide whether to continue
     """
     ctx = StepContext()
-    print(f"\n  {dim('──')} Step {step_num}: {bold(title)} {dim('──')}")
+    if debug:
+        print(f"\n  {dim('──')} Step {step_num}: {bold(title)} {dim('──')}")
 
     t0 = time.monotonic()
     try:
@@ -131,12 +132,13 @@ def step_gate(
     elapsed = time.monotonic() - t0
 
     # Print result
-    if ctx.ok:
-        print(f"  {green('✓')}  {title}  {dim(f'({elapsed:.1f}s)')}")
-    else:
-        print(f"  {red('✗')}  {title}  {dim(f'({elapsed:.1f}s)')}")
-        if ctx.error:
-            print(f"      {red(ctx.error)}")
+    if debug:
+        if ctx.ok:
+            print(f"  {green('✓')}  {title}  {dim(f'({elapsed:.1f}s)')}")
+        else:
+            print(f"  {red('✗')}  {title}  {dim(f'({elapsed:.1f}s)')}")
+            if ctx.error:
+                print(f"      {red(ctx.error)}")
 
     # Record
     step_log.add(StepRecord(

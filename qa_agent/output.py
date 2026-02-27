@@ -21,6 +21,11 @@ Legacy API (kept for backward compat — imports still work):
 from __future__ import annotations
 
 import importlib.metadata
+import importlib.metadata
+import os
+import select
+import signal
+import subprocess
 import sys
 import termios
 import tty
@@ -338,14 +343,15 @@ def arrow_select(prompt: str, options: list[tuple[str, str]]) -> int:
 
 
 def confirm(prompt: str, default: bool = True) -> bool:
-    """Y/n confirmation prompt.  Falls back to `default` when not a TTY."""
+    """Y/n confirmation prompt using arrow_select. Falls back to default when not a TTY."""
     if not sys.stdin.isatty():
         return default
-    suffix = "[Y/n]" if default else "[y/N]"
-    answer = input(f"  {prompt} {dim(suffix)} ").strip().lower()
-    if not answer:
-        return default
-    return answer in ("y", "yes")
+    if default:
+        ans = arrow_select(prompt, [("Yes", "default"), ("No", "")])
+        return ans == 0
+    else:
+        ans = arrow_select(prompt, [("No", "default"), ("Yes", "")])
+        return ans == 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -455,3 +461,83 @@ class Spinner:
 
     def __exit__(self, *args) -> None:
         self._status.__exit__(*args)
+# ─────────────────────────────────────────────────────────────────────────────
+# Subprocess ESC monitor  (regression/analyse)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def stream_with_esc_monitor(proc: subprocess.Popen, log_fh, print_output: bool = True) -> str:
+    """Streams stdout/stderr to terminal and log, killing proc group on double ESC.
+    
+    Expects proc to have been created with stdout=subprocess.PIPE, start_new_session=True.
+    Returns the accumulated decoded output string.
+    """
+    is_tty = sys.stdin.isatty()
+    out_fd = proc.stdout.fileno()
+    os.set_blocking(out_fd, False)
+    
+    if is_tty:
+        in_fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(in_fd)
+        tty.setcbreak(in_fd)
+        os.set_blocking(in_fd, False)
+
+    esc_count = 0
+    captured_text = ""
+    
+    try:
+        while proc.poll() is None:
+            rlist = [out_fd, in_fd] if is_tty else [out_fd]
+            r, _, _ = select.select(rlist, [], [], 0.05)
+            
+            if is_tty and in_fd in r:
+                try:
+                    while True:
+                        chunk = os.read(in_fd, 1)
+                        if not chunk:
+                            break
+                        if chunk == b'\x1b':
+                            esc_count += 1
+                            if esc_count >= 2:
+                                print("\n\n  \033[1;31m✗\033[0m  Aborted: ESC pressed twice. Terminating processes...", flush=True)
+                                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                                sys.exit(1)
+                        else:
+                            esc_count = 0
+                except (BlockingIOError, OSError):
+                    pass
+                    
+            if out_fd in r:
+                try:
+                    while True:
+                        chunk = os.read(out_fd, 4096)
+                        if not chunk:
+                            break
+                        text = chunk.decode("utf-8", errors="replace")
+                        if print_output:
+                            sys.stdout.write(text)
+                            sys.stdout.flush()
+                        log_fh.write(text)
+                        captured_text += text
+                except (BlockingIOError, OSError):
+                    pass
+    finally:
+        if is_tty:
+            os.set_blocking(in_fd, True)
+            termios.tcsetattr(in_fd, termios.TCSADRAIN, old_settings)
+            
+    # Drain remaining
+    try:
+        while True:
+            chunk = os.read(out_fd, 4096)
+            if not chunk:
+                break
+            text = chunk.decode("utf-8", errors="replace")
+            if print_output:
+                sys.stdout.write(text)
+                sys.stdout.flush()
+            log_fh.write(text)
+            captured_text += text
+    except (BlockingIOError, OSError):
+        pass
+        
+    return captured_text

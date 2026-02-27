@@ -11,6 +11,7 @@ for user confirmation and writes a timestamped log file to cwd.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -21,12 +22,12 @@ from pathlib import Path
 from typing import Optional
 
 from qa_agent.errors import PathError, QAAgentError
-from qa_agent.output import bold, cyan, dim, green, red, rule, yellow, print_header, arrow_select
+from qa_agent.output import bold, cyan, dim, green, red, rule, yellow, print_header, arrow_select, confirm, stream_with_esc_monitor
 from qa_agent.step_gate import StepLog, step_gate, write_log
 
 # ── Default script ────────────────────────────────────────────────────────────
 
-DEFAULT_SCRIPT = "../../run_apci_2025.pl"
+DEFAULT_SCRIPT = "../../scripts/run_apci_2025.pl"
 
 # ── Regexes ───────────────────────────────────────────────────────────────────
 
@@ -148,7 +149,7 @@ def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str, t
 
 # ── Data model ────────────────────────────────────────────────────────────────
 
-@dataclass
+@dataclass(frozen=True)
 class TestResult:
     test: str
     sys_ele: str
@@ -225,7 +226,7 @@ def _find_source_files(working_dir: Path, package_dir: Path) -> list[tuple[Path,
             seen.add(p)
 
     # 2. Project root fallback: sourcefile_2025_3.csh (parent of qa_agent/)
-    root_csh = package_dir.parent / "sourcefile_2025_3.csh"
+    root_csh = package_dir.parent / "scripts" / "sourcefile_2025_3.csh"
     if root_csh.exists() and root_csh not in seen:
         results.append((root_csh, "qa-agent"))
         seen.add(root_csh)
@@ -273,7 +274,7 @@ def _find_script_files(working_dir: Path, package_dir: Path) -> list[tuple[Path,
             seen.add(p)
 
     # 2. Project root: run_apci_2025.pl fallback
-    root_pl = package_dir.parent / "run_apci_2025.pl"
+    root_pl = package_dir.parent / "scripts" / "run_apci_2025.pl"
     if root_pl.exists() and root_pl not in seen:
         results.append((root_pl, "qa-agent"))
         seen.add(root_pl)
@@ -295,12 +296,26 @@ def _find_script_files(working_dir: Path, package_dir: Path) -> list[tuple[Path,
     return results
 
 
+def _check_and_chmod(script_path: Path) -> None:
+    if script_path.exists() and not os.access(str(script_path), os.X_OK):
+        print(f"\n  {yellow('⚠')}  The script '{script_path.name}' is not executable.")
+        if confirm("Grant execute permission to run it?", default=True):
+            try:
+                os.chmod(str(script_path), os.stat(str(script_path)).st_mode | 0o111)
+                print(f"  {cyan('ℹ')}  Made {script_path.name} executable")
+            except Exception as e:
+                print(f"  {yellow('⚠')}  Could not grant execute permission: {e}")
+        else:
+            print(f"  {yellow('⚠')}  Did not grant execute permission. Debug runs may fail.")
+
+
 def _select_script(script_flag: str, working_dir: Path, package_dir: Path) -> str:
     """If --script was passed, use it. Otherwise run interactive selection.
     Returns the chosen script path as string, or '' if none found.
     """
     if script_flag:
         print(f"  {green('✓')}  Using script: {script_flag}  {dim('[--script flag]')}")
+        _check_and_chmod(Path(script_flag))
         return script_flag
 
     candidates = _find_script_files(working_dir, package_dir)
@@ -308,17 +323,20 @@ def _select_script(script_flag: str, working_dir: Path, package_dir: Path) -> st
     if not candidates:
         print(f"\n  {yellow('⚠')}  No .pl script file found. Debug commands will be written to the report "
               "but cannot be executed.")
+        _check_and_chmod(package_dir.parent / "scripts" / "run_apci_2025.pl")
         return ""
 
     if len(candidates) == 1:
         path, tag = candidates[0]
         print(f"\n  {green('✓')}  Auto-selected script: {path}  {dim(f'[{tag}]')}")
+        _check_and_chmod(path)
         return str(path)
 
     options = [(p.name, tag) for p, tag in candidates]
     idx = arrow_select("Select a debug script (↑/↓ arrow keys, Enter to confirm):", options)
     chosen_path = candidates[idx][0]
     print(f"  {green('✓')}  Using script: {chosen_path}")
+    _check_and_chmod(chosen_path)
     return str(chosen_path)
 
 
@@ -380,27 +398,31 @@ def _run_debug(
     else:
         full_cmd = cmd
 
-    if verbose:
-        print(f"  {dim('cmd:')} {full_cmd}")
-        print()
+    print(f"\n  {cyan('▶')}  Running: {bold(result.test)} (seed={result.seed})")
+    print(f"  {dim('Command:')} {full_cmd}\n")
 
     exit_code: Optional[int] = None
     timed_out = False
     error_note = ""
 
     try:
-        with log_file.open("w") as fh:
-            proc = subprocess.run(
+        with log_file.open("w", encoding="utf-8") as fh:
+            proc = subprocess.Popen(
                 full_cmd,
                 shell=True,
-                stdout=fh,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                timeout=7200,
+                cwd=str(debug_dir),
+                start_new_session=True,
             )
+            stream_with_esc_monitor(proc, fh, print_output=True)
+            proc.wait(timeout=7200)
         exit_code = proc.returncode
         if exit_code != 0:
             error_note = f"exit {exit_code}"
     except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
         timed_out = True
         exit_code = None
         error_note = "Timed out after 2h"
