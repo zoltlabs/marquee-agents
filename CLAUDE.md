@@ -35,6 +35,7 @@ marquee-agents/
 │   ├── analyse.md               # `qa-agent analyse` — results parser + QA report writer
 │   ├── doctor.md                # `qa-agent doctor` — env health checker
 │   ├── regression.md            # `qa-agent regression` — regression run lifecycle
+│   ├── help_and_hello.md        # `qa-agent hello` / `qa-agent guide` — welcome screen + user guides
 │   ├── logging.md               # Session logging — format, rotation, crash capture
 │   ├── ux_improvements.md       # output.py, errors.py, spinner, flags
 │   ├── debug_mode.md            # step-through debug mode — step_gate, StepLog, log files
@@ -45,10 +46,11 @@ marquee-agents/
 │   ├── __init__.py
 │   ├── cli.py                   # Thin entry-point; registers all sub-commands
 │   ├── providers.py             # Shared ProviderRequest dataclass (provider interface)
-│   ├── output.py                # Shared ANSI rendering: colour helpers, banner, Spinner
+│   ├── output.py                # Shared ANSI rendering: colour helpers, banner, Spinner, print_welcome
 │   ├── errors.py                # Error taxonomy (QAAgentError hierarchy) + central handler
 │   ├── session_log.py           # Structured session logging (JSON Lines, gzip, rotation)
 │   ├── step_gate.py             # Step-through debug gate: StepLog, StepRecord, step_gate()
+│   ├── guide.py                 # Short per-command user guides + overview renderer
 │   ├── summarise.py             # Orchestrator: prompt building, output formatting, provider routing
 │   ├── analyse.py               # Regression results parser + Markdown QA report writer
 │   ├── doctor.py                # Environment health checker: SDKs, auth, log dir
@@ -76,7 +78,8 @@ marquee-agents/
 
 | Sub-command | Args / Flags | Description | Detail |
 |------------|-------|-------------|--------|
-| `hello` | — | Prints a greeting | — |
+| `hello` | — | ASCII logo welcome screen + quick start | [`IMPLEMENTATION/help_and_hello.md`](./IMPLEMENTATION/help_and_hello.md) |
+| `guide` | `[COMMAND]` | Short practical user guide for any command; no arg = overview of all | [`IMPLEMENTATION/help_and_hello.md`](./IMPLEMENTATION/help_and_hello.md) |
 | `summarise` | `[PATH …]` `--provider`/`-p {claude,openai,gemini}` | Summarise files or directories using AI | [`IMPLEMENTATION/summarise.md`](./IMPLEMENTATION/summarise.md) |
 | `doctor` | `--verbose`/`-v` | Check SDKs, auth, and log system | [`IMPLEMENTATION/doctor.md`](./IMPLEMENTATION/doctor.md) |
 | `analyse` | `[--mode basic\|slurm]` `[--working-dir PATH]` `[--output PATH]` `[--script/-s SCRIPT]` `[--test NAME]` `[--verbose/-v]` | Parse regression results, interactively select source/script files, re-run each failure in a debug subdir, capture logs, and write a grouped Markdown QA report | [`IMPLEMENTATION/analyse.md`](./IMPLEMENTATION/analyse.md) |
@@ -146,7 +149,12 @@ Commit format: `feat(cli): add summarise command`
 
 ```bash
 pip install -e .                           # Install in editable/dev mode
-qa-agent hello                             # Greeting
+qa-agent hello                             # Welcome screen: ASCII logo + quick start
+qa-agent guide                             # Overview of all commands
+qa-agent guide regression                  # Guide for regression command
+qa-agent guide analyse                     # Guide for analyse command
+qa-agent guide summarise                   # Guide for summarise command
+qa-agent guide doctor                      # Guide for doctor command
 qa-agent doctor                            # Check environment health
 qa-agent doctor --verbose                  # Show raw values/paths
 qa-agent summarise                         # Summarise current dir (pwd) — Claude by default

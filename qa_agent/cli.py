@@ -8,15 +8,8 @@ from qa_agent.session_log import SessionLog
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="qa-agent",
-        description="QA Agent — automate post-regression triage for DV engineers.",
-        epilog=(
-            "Examples:\n"
-            "  qa-agent doctor                   # check environment\n"
-            "  qa-agent summarise                # summarise cwd\n"
-            "  qa-agent summarise src/ -p gemini\n"
-            "  qa-agent analyse                  # parse results and generate QA report\n"
-            "  qa-agent --version\n"
-        ),
+        description="Post-regression triage automation for DV engineers.",
+        epilog="Run  qa-agent guide <command>  for practical examples.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -47,7 +40,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
 
     # ── hello ─────────────────────────────────────────────────────────────────
-    subparsers.add_parser("hello", help="Print a greeting message.")
+    subparsers.add_parser("hello", help="Welcome screen and quick start info.")
 
     # ── summarise ─────────────────────────────────────────────────────────────
     summarise_parser = subparsers.add_parser(
@@ -171,6 +164,22 @@ def main() -> None:
         help="Print detailed progress (resolved paths, full commands).",
     )
 
+    # ── guide ─────────────────────────────────────────────────────────────────
+    sp_guide = subparsers.add_parser(
+        "guide",
+        help="Short user guide for any command.",
+        description="Show a practical guide with examples for a command.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sp_guide.add_argument(
+        "topic",
+        nargs="?",
+        default="",
+        choices=["regression", "analyse", "summarise", "doctor", ""],
+        metavar="COMMAND",
+        help="Command to show guide for (omit for overview of all commands).",
+    )
+
     # ── dispatch ──────────────────────────────────────────────────────────────
     args = parser.parse_args()
 
@@ -183,7 +192,8 @@ def main() -> None:
 
     try:
         if args.command == "hello":
-            print("Hello 👋 I am QA Agent. How can I help you?")
+            from qa_agent.output import print_welcome
+            print_welcome()
 
         elif args.command == "summarise":
             from qa_agent.summarise import run
@@ -219,6 +229,10 @@ def main() -> None:
                 debug=args.debug,
                 log=log,
             )
+
+        elif args.command == "guide":
+            from qa_agent.guide import run as guide_run
+            guide_run(getattr(args, "topic", ""))
 
         else:
             parser.print_help()

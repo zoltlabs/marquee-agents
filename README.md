@@ -166,7 +166,8 @@ qa-agent <command> [options]
 
 | Command | Description |
 |---------|-------------|
-| `hello` | Verify the agent is installed and responsive |
+| `hello` | ASCII logo welcome screen and quick start info |
+| `guide [COMMAND]` | Short practical user guide for any command; omit for overview of all |
 | `doctor` | Check that all SDKs and credentials are correctly configured |
 | `summarise [PATH …]` | Summarise files or directories using AI |
 | `analyse` | Parse a regression results file, run debug commands per failure, and write a grouped Markdown QA report |
@@ -193,6 +194,21 @@ qa-agent doctor --verbose  # show raw values and full paths
 ```
 
 Exit codes: `0` = all checks passed (or warnings only) · `1` = one or more errors found.
+
+---
+
+### `qa-agent guide`
+
+Short, practical user guides — each explains **what** the command does, **when** to use it,
+and shows realistic examples. Different from `--help` which only lists flags.
+
+```bash
+qa-agent guide                    # overview of all commands
+qa-agent guide regression         # guide for regression command
+qa-agent guide analyse            # guide for analyse command
+qa-agent guide summarise          # guide for summarise command
+qa-agent guide doctor             # guide for doctor command
+```
 
 ---
 
@@ -412,16 +428,18 @@ marquee-agents/
 │   ├── summarise.md         # summarise command — architecture + provider contract
 │   ├── analyse.md           # analyse command — results parser + QA report writer
 │   ├── doctor.md            # doctor command — env health checker design
+│   ├── help_and_hello.md    # hello + guide commands — welcome screen + user guides
 │   ├── logging.md           # session logging — format, rotation, crash capture
 │   ├── ux_improvements.md   # output.py, errors.py, spinner, global flags
 │   └── claude_sdk.md        # Claude-specific auth, tools, error handling
 ├── qa_agent/
 │   ├── __init__.py          # Package init
 │   ├── cli.py               # CLI entry-point and sub-command definitions
-│   ├── output.py            # Shared ANSI rendering (colour helpers, banner, Spinner)
+│   ├── output.py            # Shared ANSI rendering (colour helpers, banner, Spinner, print_welcome)
 │   ├── errors.py            # Error taxonomy (QAAgentError hierarchy) + central handler
 │   ├── session_log.py       # Structured session logging (JSON Lines, gzip, rotation)
 │   ├── providers.py         # Shared ProviderRequest dataclass
+│   ├── guide.py             # Short per-command user guides + overview renderer
 │   ├── summarise.py         # Orchestrator: path resolution, output formatting
 │   ├── analyse.py           # Regression results parser + Markdown QA report writer
 │   ├── doctor.py            # Environment health checker

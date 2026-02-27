@@ -6,7 +6,7 @@ Usage:
     from qa_agent.output import (
         bold, cyan, red, green, yellow, dim, magenta, rule,
         print_banner, print_success, print_error, render_line,
-        Spinner,
+        print_welcome, Spinner,
     )
 
 Never import ANSI helpers directly from summarise.py.
@@ -14,6 +14,7 @@ Never import ANSI helpers directly from summarise.py.
 
 from __future__ import annotations
 
+import importlib.metadata
 import itertools
 import sys
 import threading
@@ -45,6 +46,66 @@ def magenta(t: str) -> str: return _c("1;35", t)
 
 def rule(char: str = "─", width: int = 60) -> str:
     return dim(char * width)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Welcome screen
+# ─────────────────────────────────────────────────────────────────────────────
+
+QA_AGENT_LOGO = r"""
+    ██████╗  █████╗        █████╗  ██████╗ ███████╗
+   ██╔═══██╗██╔══██╗      ██╔══██╗██╔════╝ ██╔════╝
+   ██║   ██║███████║█████╗███████║██║  ███╗█████╗
+   ██║▄▄ ██║██╔══██║╚════╝██╔══██║██║   ██║██╔══╝
+   ╚██████╔╝██║  ██║      ██║  ██║╚██████╔╝███████╗
+    ╚══▀▀═╝ ╚═╝  ╚═╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
+"""
+
+
+def _get_version() -> str:
+    """Read version from package metadata, fallback to 'dev'."""
+    try:
+        return importlib.metadata.version("qa-agent")
+    except importlib.metadata.PackageNotFoundError:
+        return "dev"
+
+
+def print_welcome() -> None:
+    """Print the full welcome screen with ASCII art logo and quick start."""
+    version = _get_version()
+    width = 54
+
+    # ── Logo box ──────────────────────────────────────────────────
+    print()
+    print(cyan("╭" + "─" * width + "╮"))
+    for line in QA_AGENT_LOGO.splitlines():
+        padded = f"│  {line:<52}│"
+        print(cyan(padded))
+    print(cyan("│" + " " * width + "│"))
+    print(cyan("│") + f"   {bold('Post-regression triage, automated.'):<52}" + cyan("│"))
+    print(cyan("│") + f"   Built for DV & Design engineers.{' ' * 19}" + cyan("│"))
+    print(cyan("│") + " " * width + cyan("│"))
+    version_line = f"   Version: {version}"
+    print(cyan("│") + f"{version_line:<{width}}" + cyan("│"))
+    print(cyan("│") + " " * width + cyan("│"))
+    print(cyan("╰" + "─" * width + "╯"))
+    print()
+
+    # ── Quick start ───────────────────────────────────────────────
+    print(f"  {bold('Quick start:')}")
+    print()
+    cmds = [
+        ("qa-agent doctor",      "Check your environment is set up"),
+        ("qa-agent regression",  "Run a regression (basic or slurm)"),
+        ("qa-agent analyse",     "Parse failures, run debug, generate report"),
+        ("qa-agent summarise .", "Summarise code with AI (Claude/OpenAI/Gemini)"),
+    ]
+    for cmd, desc in cmds:
+        print(f"    {cyan(f'{cmd:<25}')} {dim(desc)}")
+    print()
+    print(f"  Run  {bold('qa-agent <command> --help')}  for details on any command.")
+    print(f"  Run  {bold('qa-agent guide <command>')}   for a short user guide.")
+    print()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
