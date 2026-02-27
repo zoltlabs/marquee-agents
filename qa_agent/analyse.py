@@ -343,8 +343,7 @@ def _select_script(script_flag: str, working_dir: Path, package_dir: Path) -> st
 # ── Debug subdirectory helpers (Step 5) ───────────────────────────────────────
 
 def _debug_dir_name(result: TestResult) -> str:
-    config_hash = hashlib.md5(result.configuration.encode()).hexdigest()[:6]
-    return f"debug_{result.test}_{config_hash}_{result.seed}"
+    return f"debug_{result.test}"
 
 
 def _create_debug_dirs(
@@ -600,6 +599,22 @@ def run(
     # ── Step 1: find and read results file ────────────────────────────────────
     with step_gate(1, "Read results file", debug, step_log) as ctx:
         results_path = _find_results(wd)
+        
+        # Check for sig_pcie in the path
+        sig_pcie_dir = None
+        for parent in wd.parents:
+            if parent.name == "sig_pcie":
+                sig_pcie_dir = parent
+                break
+        if wd.name == "sig_pcie":
+            sig_pcie_dir = wd
+            
+        if not sig_pcie_dir:
+            ctx.fail("sig_pcie not found in the current working directory path.")
+            
+        if sig_pcie_dir and "sig_pcie/verif/AVERY/run/results" not in wd.as_posix():
+             ctx.fail("cwd must be within sig_pcie/verif/AVERY/run/results.")
+             
         ctx.detail = f"Path: {results_path}"
     if not ctx.ok:
         log_path = write_log(step_log, wd)
@@ -664,36 +679,35 @@ def run(
     unique_failing = len({r.test for r in failed})
     print(f"\n  Found {bold(str(len(failed)))} failed test(s) across {bold(str(unique_failing))} unique test name(s).\n")
 
-    # ── Step 4: source file selection ─────────────────────────────────────────
+    # ── Step 4: Find sig_pcie source and script ───────────────────────────────
     step_offset = 1 if test_filter else 0
-    with step_gate(3 + step_offset, "Select source file", debug, step_log) as ctx:
-        source_file = _select_source_file(wd, package_dir)
-        if source_file:
-            ctx.detail = f"Selected: {source_file.name}"
+    with step_gate(3 + step_offset, "Locate source file and script", debug, step_log) as ctx:
+        if sig_pcie_dir:
+            source_file = sig_pcie_dir / "sourcefile_2025_3.csh"
+            if not source_file.exists():
+                source_file = None
+            
+            pl_script = sig_pcie_dir / "verif/AVERY/run/run_apci_2025.pl"
+            if pl_script.exists():
+                effective_script = str(pl_script)
+            else:
+                effective_script = ""
+                
+            ctx.detail = f"source: {source_file.name if source_file else 'None'}, script: {Path(effective_script).name if effective_script else 'None'}"
         else:
-            ctx.detail = "(none — env will not be pre-configured)"
-        # non-fatal: always ok
+            ctx.fail("sig_pcie_dir is somehow missing.")
+            
     if not ctx.ok:
         log_path = write_log(step_log, wd)
         print(f"\n  {cyan('ℹ')}  Log: {log_path}")
         return
+        
+    print(f"  {green('✓')}  Using source file: {source_file if source_file else 'None'}")
+    print(f"  {green('✓')}  Using script: {effective_script if effective_script else 'None'}")
 
-    # ── Step 5: script file selection ─────────────────────────────────────────
-    with step_gate(4 + step_offset, "Select debug script", debug, step_log) as ctx:
-        effective_script = _select_script(script, wd, package_dir)
-        if effective_script:
-            ctx.detail = f"Selected: {effective_script}"
-        else:
-            ctx.detail = "(none — debug commands written to report only)"
-        # non-fatal: always ok
-    if not ctx.ok:
-        log_path = write_log(step_log, wd)
-        print(f"\n  {cyan('ℹ')}  Log: {log_path}")
-        return
-
-    # ── Step 6: create debug directories ──────────────────────────────────────
+    # ── Step 5: create debug directories ──────────────────────────────────────
     if failed:
-        with step_gate(5 + step_offset, "Create debug directories", debug, step_log) as ctx:
+        with step_gate(4 + step_offset, "Create debug directories", debug, step_log) as ctx:
             print()
             debug_dirs = _create_debug_dirs(failed, wd, verbose=verbose)
             ctx.detail = f"Created: {len(debug_dirs)} directories"
@@ -704,7 +718,7 @@ def run(
     else:
         debug_dirs = {}
 
-    # ── Step 7: run debug commands ─────────────────────────────────────────────
+    # ── Step 6: run debug commands ─────────────────────────────────────────────
     if failed:
         print()
         print(rule())
@@ -714,7 +728,7 @@ def run(
 
         for i, result in enumerate(failed, 1):
             step_title = f"Debug [{i}/{len(failed)}] {result.test} seed={result.seed}"
-            with step_gate(6 + step_offset + (i - 1), step_title, debug, step_log) as ctx:
+            with step_gate(5 + step_offset + (i - 1), step_title, debug, step_log) as ctx:
                 outcome = _run_debug(
                     result, debug_dirs[result], effective_script, source_file, i, len(failed),
                     verbose=verbose,
@@ -739,8 +753,8 @@ def run(
     else:
         print(f"\n  {green('✓')} All {len(passed)} test(s) passed.\n")
 
-    # ── Step 8: write report ───────────────────────────────────────────────────
-    report_step_num = 6 + step_offset + len(failed) if failed else 6 + step_offset
+    # ── Step 7: write report ───────────────────────────────────────────────────
+    report_step_num = 5 + step_offset + len(failed) if failed else 5 + step_offset
     now = datetime.now()
     report_path = (
         Path(output) if output

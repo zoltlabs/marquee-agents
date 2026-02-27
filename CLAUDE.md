@@ -88,8 +88,8 @@ marquee-agents/
 | `guide` | `[COMMAND]` | Short practical user guide for any command; no arg = overview of all | [`IMPLEMENTATION/help_and_hello.md`](./IMPLEMENTATION/help_and_hello.md) |
 | `summarise` | `[PATH …]` `--provider`/`-p {claude,openai,gemini}` | Summarise files or directories using AI | [`IMPLEMENTATION/summarise.md`](./IMPLEMENTATION/summarise.md) |
 | `doctor` | `--verbose`/`-v` | Check SDKs, auth, and log system | [`IMPLEMENTATION/doctor.md`](./IMPLEMENTATION/doctor.md) |
-| `analyse` | `[--mode basic\|slurm]` `[--working-dir PATH]` `[--output PATH]` `[--script/-s SCRIPT]` `[--test NAME]` `[--verbose/-v]` | Parse regression results, interactively select source/script files, re-run each failure in a debug subdir, capture logs, and write a grouped Markdown QA report | [`IMPLEMENTATION/analyse.md`](./IMPLEMENTATION/analyse.md) |
-| `regression` | `[--slurm]` `[--verbose/-v]` | Source environment, locate inputs, execute regression (basic or slurm), stream output, capture log, verify results | [`IMPLEMENTATION/regression.md`](./IMPLEMENTATION/regression.md) |
+| `analyse` | `[--mode basic\|slurm]` `[--working-dir PATH]` `[--output PATH]` `[--script/-s SCRIPT]` `[--test NAME]` `[--verbose/-v]` | Parse regression results, reconstruct configs, interact with sig_pcie workspace config, and write QA report | [`IMPLEMENTATION/analyse.md`](./IMPLEMENTATION/analyse.md) |
+| `regression` | `[source]` `[--slurm]` `[--verbose/-v]` | Check for sig_pcie source directory, locate scripts/filelist, source csh, execute regression, stream log | [`IMPLEMENTATION/regression.md`](./IMPLEMENTATION/regression.md) |
 | *(none)* | — | Prints help | — |
 
 ### Global Flags (available on ALL commands)
@@ -182,8 +182,9 @@ qa-agent analyse --output report.md           # Custom report path
 qa-agent analyse -s /tools/run_debug.pl       # Skip script selection prompt
 qa-agent analyse --test apcit_cpl_out_order   # Focus on a single test case
 qa-agent analyse --verbose                    # Print detailed progress (full cmd, abs paths)
-qa-agent regression                           # Run basic regression (auto-selects scripts)
-qa-agent regression --slurm                   # Run in Slurm mode
+qa-agent regression                           # Prompts for target dir, executes within sig_pcie
+qa-agent regression target_dir                # Run basic regression inside sig_pcie/verif/AVERY/run/results/target_dir
+qa-agent regression target_dir --slurm        # Run in Slurm mode inside target_dir
 qa-agent regression --verbose                 # Print full resolved paths + commands
 
 # Claude auth — Option 1 (API key)

@@ -152,6 +152,12 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     regression_parser.add_argument(
+        "source",
+        nargs="?",
+        default=None,
+        help="Target directory name in sig_pcie/verif/AVERY/run/results/",
+    )
+    regression_parser.add_argument(
         "--slurm",
         action="store_true",
         default=False,
@@ -224,6 +230,7 @@ def main() -> None:
         elif args.command == "regression":
             from qa_agent.regression import run as regression_run
             regression_run(
+                source=getattr(args, "source", None),
                 slurm=args.slurm,
                 verbose=args.verbose,
                 debug=args.debug,
