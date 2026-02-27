@@ -170,6 +170,7 @@ qa-agent <command> [options]
 | `doctor` | Check that all SDKs and credentials are correctly configured |
 | `summarise [PATH …]` | Summarise files or directories using AI |
 | `analyse` | Parse a regression results file, run debug commands per failure, and write a grouped Markdown QA report |
+| `regression` | Source environment, locate inputs, execute regression (basic or slurm), stream output, capture log, verify results |
 
 ### Global Flags
 
@@ -298,6 +299,53 @@ qa-agent analyse --working-dir /path/to/run --output report.md -s /tools/run_deb
 | `results.doc` | `basic` |
 | `results_new.doc` | `slurm` |
 
+---
+
+### `qa-agent regression`
+
+Run a regression from start to finish — source the environment, locate input files, execute, stream output live, and verify results.
+
+```bash
+# Basic regression (auto-selects bundled script + filelist)
+qa-agent regression
+
+# Slurm mode (requires config.txt + run_questa.sh)
+qa-agent regression --slurm
+
+# Print full resolved paths and commands
+qa-agent regression --verbose
+```
+
+#### Flags
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--slurm` | — | off | Run in Slurm mode (requires `config.txt` + `run_questa.sh`) |
+| `--verbose` | `-v` | off | Print full resolved paths and the assembled command |
+
+#### Execution pipeline
+
+1. **Selects** a `.csh` environment source file (interactive if cwd has options; auto-selects bundled default otherwise).
+2. **Locates** `filelist.txt` in cwd; falls back to bundled default with a `[Y/n]` prompt.
+3. **Basic mode**: locates the regression `.py` script; runs `python3 <script.py> <filelist.txt>`.
+4. **Slurm mode**: locates `config.txt` and `run_questa.sh`; runs `./run_questa.sh <filelist.txt> <config.txt> <slurm_script.py>`.
+5. **Streams** stdout live to the terminal while capturing to `regression_basic_<timestamp>.log` / `regression_slurm_<timestamp>.log`.
+6. **Verifies** `results.doc` (basic) or `results_new.doc` (slurm) was produced.
+7. **Prints** a summary block with mode, script, filelist, source file, log path, and result.
+
+#### Bundled defaults
+
+| File | Purpose |
+|------|---------|
+| `sourcefile_2025_3.csh` | Environment setup |
+| `filelist.txt` | Default test list |
+| `config.txt` | Slurm configuration |
+| `run_questa.sh` | Slurm launcher |
+| `regression_8B_16B_questa.py` | Basic regression runner |
+| `regression_slurm_questa_2025.py` | Slurm regression runner |
+
+---
+
 #### Debug directory layout
 
 For every failure, a subdirectory is created under `--working-dir`:
@@ -371,6 +419,7 @@ marquee-agents/
 │   ├── summarise.py         # Orchestrator: path resolution, output formatting
 │   ├── analyse.py           # Regression results parser + Markdown QA report writer
 │   ├── doctor.py            # Environment health checker
+│   ├── regression.py        # Regression run lifecycle: source env, locate files, run, verify
 │   ├── claude_provider.py   # Claude Agent SDK provider
 │   ├── openai_provider.py   # OpenAI Chat Completions provider
 │   └── gemini_provider.py   # Google Gemini provider

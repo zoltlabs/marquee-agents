@@ -145,6 +145,32 @@ def main() -> None:
         help="Print detailed progress to stdout (debug dirs, command text, etc.).",
     )
 
+    # ── regression ────────────────────────────────────────────────────────────
+    regression_parser = subparsers.add_parser(
+        "regression",
+        help="Run a regression (basic or slurm mode).",
+        description=(
+            "Source environment, locate inputs, execute regression,\n"
+            "capture logs, and verify results.\n\n"
+            "  qa-agent regression                # basic regression\n"
+            "  qa-agent regression --slurm        # slurm mode\n"
+            "  qa-agent regression --verbose      # print full resolved paths + commands\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    regression_parser.add_argument(
+        "--slurm",
+        action="store_true",
+        default=False,
+        help="Run in Slurm mode (requires config.txt + run_questa.sh).",
+    )
+    regression_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=False,
+        help="Print detailed progress (resolved paths, full commands).",
+    )
+
     # ── dispatch ──────────────────────────────────────────────────────────────
     args = parser.parse_args()
 
@@ -181,6 +207,14 @@ def main() -> None:
                 script=args.script,
                 test_filter=args.test,
                 verbose=args.verbose,
+            )
+
+        elif args.command == "regression":
+            from qa_agent.regression import run as regression_run
+            regression_run(
+                slurm=args.slurm,
+                verbose=args.verbose,
+                log=log,
             )
 
         else:

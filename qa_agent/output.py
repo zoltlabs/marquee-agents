@@ -70,6 +70,15 @@ def print_doctor_banner() -> None:
     print()
 
 
+def print_regression_banner(mode: str) -> None:
+    """Print the opening banner for `qa-agent regression`."""
+    print()
+    print(rule())
+    print(f"  {cyan('qa-agent regression')}  {dim('·')}  Mode: {bold(mode)}")
+    print(rule())
+    print()
+
+
 def print_success(msg: str = "Summary complete.") -> None:
     """Print a green success footer."""
     print()
