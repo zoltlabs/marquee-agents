@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import signal
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -414,13 +415,24 @@ def _run_debug(
                 cwd=str(debug_dir),
                 start_new_session=True,
             )
-            stream_with_esc_monitor(proc, fh, print_output=True)
-            proc.wait(timeout=7200)
+            try:
+                stream_with_esc_monitor(proc, fh, print_output=True)
+                proc.wait(timeout=7200)
+            except BaseException:
+                if proc.poll() is None:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                raise
         exit_code = proc.returncode
         if exit_code != 0:
             error_note = f"exit {exit_code}"
     except subprocess.TimeoutExpired:
-        proc.kill()
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         proc.wait()
         timed_out = True
         exit_code = None

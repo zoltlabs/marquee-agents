@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import signal
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -57,8 +58,16 @@ def _run_regression(
                 cwd=str(target_dir),
                 start_new_session=True,
             )
-            captured_text = stream_with_esc_monitor(proc, log_file, print_output=True)
-            proc.wait(timeout=7200)
+            try:
+                captured_text = stream_with_esc_monitor(proc, log_file, print_output=True)
+                proc.wait(timeout=7200)
+            except BaseException:
+                if proc.poll() is None:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                raise
             exit_code = proc.returncode
     except Exception as exc:
         raise QAAgentError(f"Regression failed to start: {exc}") from exc
