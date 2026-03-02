@@ -58,4 +58,4 @@ qa-agent regression [source] [--slurm] [--verbose/-v]
 
 - Output is streamed live while being captured to `regression_<mode>_<timestamp>.log` inside the `target_dir`.
 - After completion, verify if `results.doc` (Basic) or `results_new.doc` (Slurm) exists.
-- The step log dump is skipped at the end unless running in `--debug` mode.
+- The step log dump is skipped at the end unless running in `--debug` mode (dumped to `cwd` as `qa-agent_regression_<timestamp>.log`).

@@ -40,7 +40,7 @@ _SHARED = (
     r"\s+{verb}\s+(?P<seed>\d+)"
 )
 PASS_RE = re.compile(_SHARED.format(verb="passed for"), re.IGNORECASE)
-FAIL_RE = re.compile(_SHARED.format(verb="failed for"), re.IGNORECASE)
+FAIL_RE = re.compile(_SHARED.format(verb="(?:failed for|NA for|NA)"), re.IGNORECASE)
 
 # ── Mode detection ────────────────────────────────────────────────────────────
 
