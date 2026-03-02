@@ -35,19 +35,23 @@ def _run_regression(
     log_path = target_dir / f"regression_{mode_label}_{timestamp}.log"
 
     exec_shell = None
+    use_shell = True
     if source_file and source_file.exists():
         pcie_dir = source_file.parent.resolve()
         tgt_dir = target_dir.resolve()
         if source_file.suffix in {'.csh', '.tcsh'}:
             exec_shell = '/bin/csh' if os.path.exists('/bin/csh') else 'csh'
-            shell_cmd = f"cd {pcie_dir} ; source {source_file.name} ; cd {tgt_dir} ; {' '.join(cmd)}"
+            csh_cmd = f"cd {pcie_dir} ; source {source_file.name} ; cd {tgt_dir} ; {' '.join(cmd)}"
+            shell_cmd = [f"./{source_file.name}", "-c", csh_cmd]
+            use_shell = False
         else:
             shell_cmd = f"cd {pcie_dir} && source {source_file.name} && cd {tgt_dir} && {' '.join(cmd)}"
     else:
         shell_cmd = " ".join(cmd)
 
     if verbose:
-        print(f"  {dim('cmd:')} {shell_cmd}")
+        printable = shell_cmd[2] if not use_shell else shell_cmd
+        print(f"  {dim('cmd:')} {printable}")
         print()
 
     print(f"  {cyan('ℹ')}  Log: {dim(str(log_path))}")
@@ -59,7 +63,7 @@ def _run_regression(
         with open(log_path, "w", encoding="utf-8") as log_file:
             proc = subprocess.Popen(
                 shell_cmd,
-                shell=True,
+                shell=use_shell,
                 executable=exec_shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
