@@ -17,7 +17,7 @@ from typing import Optional
 from qa_agent.errors import ConfigError, QAAgentError
 from qa_agent.output import (
     bold, cyan, dim, green, red, rule, yellow,
-    print_header, confirm, stream_with_esc_monitor
+    print_header, confirm, stream_with_esc_monitor, arrow_select
 )
 from qa_agent.step_gate import StepLog, write_log, step_gate
 
@@ -136,12 +136,16 @@ def run(
             run_dir = sig_pcie_dir / "verif/AVERY/run"
 
             if not source:
-                try:
-                    source = input("  Enter directory name for regression: ").strip()
-                except EOFError:
-                    source = ""
-                if not source:
-                    ctx.fail("Directory name cannot be empty.")
+                if cwd.parent.name == "results":
+                    source = cwd.name
+                    print(f"  {cyan('ℹ')}  Using current directory '{source}' as target.")
+                else:
+                    try:
+                        source = input("  Enter directory name for regression: ").strip()
+                    except EOFError:
+                        source = ""
+                    if not source:
+                        ctx.fail("Directory name cannot be empty.")
             
             if ctx.ok:
                 target_dir = results_dir / source
@@ -175,10 +179,22 @@ def run(
                 
             if ctx.ok:
                 filelist_target = target_dir / "filelist.txt"
+                bundled_filelist = PACKAGE_DIR / "scripts" / "filelist.txt"
+
                 if filelist_target.exists():
-                    filelist = filelist_target
+                    if cwd.parent.name == "results" and bundled_filelist.exists():
+                        ans = arrow_select(
+                            "Found filelist.txt in current directory. Which one to use?",
+                            [("The one in cwd", "cwd"), ("The one in qa-agent script", "qa-agent")]
+                        )
+                        if ans == 0:
+                            filelist = filelist_target
+                        else:
+                            shutil.copy2(bundled_filelist, filelist_target)
+                            filelist = filelist_target
+                    else:
+                        filelist = filelist_target
                 else:
-                    bundled_filelist = PACKAGE_DIR / "scripts" / "filelist.txt"
                     print(f"  {yellow('⚠')}  No filelist.txt found in target directory.")
                     if bundled_filelist.exists() and confirm("Use the one in qa-agent script?", default=True):
                         shutil.copy2(bundled_filelist, filelist_target)
@@ -216,10 +232,22 @@ def run(
 
             if ctx.ok:
                 filelist_target = target_dir / "filelist.txt"
+                bundled_filelist = PACKAGE_DIR / "scripts" / "filelist.txt"
+
                 if filelist_target.exists():
-                    filelist = filelist_target
+                    if cwd.parent.name == "results" and bundled_filelist.exists():
+                        ans = arrow_select(
+                            "Found filelist.txt in current directory. Which one to use?",
+                            [("The one in cwd", "cwd"), ("The one in qa-agent script", "qa-agent")]
+                        )
+                        if ans == 0:
+                            filelist = filelist_target
+                        else:
+                            shutil.copy2(bundled_filelist, filelist_target)
+                            filelist = filelist_target
+                    else:
+                        filelist = filelist_target
                 else:
-                    bundled_filelist = PACKAGE_DIR / "scripts" / "filelist.txt"
                     print(f"\n  {yellow('⚠')}  No filelist.txt found in target directory.")
                     if bundled_filelist.exists() and confirm("Use the one in qa-agent script?", default=True):
                         shutil.copy2(bundled_filelist, filelist_target)
@@ -229,7 +257,29 @@ def run(
 
             if ctx.ok:
                 if target_config.exists():
-                    config = target_config
+                    if cwd.parent.name == "results" and (src_config.exists() or bundled_config.exists()):
+                        options = [("The one in cwd", "cwd")]
+                        if src_config.exists():
+                            options.append(("The config.txt from questa_slurm", "questa_slurm"))
+                        if bundled_config.exists():
+                            options.append(("The one in qa-agent script", "qa-agent"))
+                        
+                        ans = arrow_select(
+                            "Found config.txt in current directory. Which one to use?",
+                            options
+                        )
+                        
+                        if ans == 0:
+                            config = target_config
+                        else:
+                            selected_tag = options[ans][1]
+                            if selected_tag == "questa_slurm":
+                                shutil.copy2(src_config, target_config)
+                            elif selected_tag == "qa-agent":
+                                shutil.copy2(bundled_config, target_config)
+                            config = target_config
+                    else:
+                        config = target_config
                 else:
                     print(f"\n  {yellow('⚠')}  No config.txt found in target directory.")
                     bundled_config = PACKAGE_DIR / "scripts" / "config.txt"
@@ -270,7 +320,7 @@ def run(
             ctx.fail(f"Exit code: {exec_exit_code}")
             
     if not ctx.ok and exec_exit_code != 0:
-        if debug or True:  # always write on failure
+        if debug:
             log_path = write_log(step_log, Path.cwd())
             print(f"\n  {cyan('ℹ')}  Step log: {log_path}")
 
@@ -288,7 +338,6 @@ def run(
     print(f"  {result_status}")
     print()
 
-    has_failure = any(s.status == "FAILED" for s in step_log.steps)
-    if debug or has_failure:
+    if debug:
         step_log_path = write_log(step_log, Path.cwd())
         print(f"  {cyan('ℹ')}  Step log: {step_log_path}\n")
