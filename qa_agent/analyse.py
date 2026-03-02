@@ -398,7 +398,7 @@ def _run_debug(
     if source_file:
         full_cmd = f"source {source_file} && \\\n{cmd}"
         if source_file.suffix in {'.csh', '.tcsh'}:
-            exec_shell = shutil.which("csh") or shutil.which("tcsh")
+            exec_shell = '/bin/csh' if os.path.exists('/bin/csh') else 'csh'
     else:
         full_cmd = cmd
 

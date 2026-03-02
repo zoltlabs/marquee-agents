@@ -38,8 +38,7 @@ def _run_regression(
     if source_file and source_file.exists():
         shell_cmd = f"source {source_file.resolve()} && {' '.join(cmd)}"
         if source_file.suffix in {'.csh', '.tcsh'}:
-            import shutil
-            exec_shell = shutil.which("csh") or shutil.which("tcsh")
+            exec_shell = '/bin/csh' if os.path.exists('/bin/csh') else 'csh'
     else:
         shell_cmd = " ".join(cmd)
 
