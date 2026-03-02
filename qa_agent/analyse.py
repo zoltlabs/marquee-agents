@@ -40,7 +40,7 @@ _SHARED = (
     r"\s+{verb}\s+(?P<seed>\d+)"
 )
 PASS_RE = re.compile(_SHARED.format(verb="passed for"), re.IGNORECASE)
-FAIL_RE = re.compile(_SHARED.format(verb="failed for"), re.IGNORECASE)
+FAIL_RE = re.compile(_SHARED.format(verb="(?:failed for|NA for|NA)"), re.IGNORECASE)
 
 # ── Mode detection ────────────────────────────────────────────────────────────
 
@@ -395,15 +395,23 @@ def _run_debug(
     cmd = result.debug_command(script)
 
     exec_shell = None
+    use_shell = True
     if source_file:
-        full_cmd = f"source {source_file} && \\\n{cmd}"
+        pcie_dir = source_file.parent.resolve()
+        tgt_dir = debug_dir.resolve()
         if source_file.suffix in {'.csh', '.tcsh'}:
             exec_shell = '/bin/csh' if os.path.exists('/bin/csh') else 'csh'
+            csh_cmd = f"cd {pcie_dir} ; source {source_file.name} ; cd {tgt_dir} ; \\\n{cmd}"
+            full_cmd = [f"./{source_file.name}", "-c", csh_cmd]
+            use_shell = False
+        else:
+            full_cmd = f"cd {pcie_dir} && source {source_file.name} && cd {tgt_dir} && \\\n{cmd}"
     else:
         full_cmd = cmd
 
+    print_cmd = full_cmd[2] if not use_shell else full_cmd
     print(f"\n  {cyan('▶')}  Running: {bold(result.test)} (seed={result.seed})")
-    print(f"  {dim('Command:')} {full_cmd}\n")
+    print(f"  {dim('Command:')} {print_cmd}\n")
 
     exit_code: Optional[int] = None
     timed_out = False
@@ -413,7 +421,7 @@ def _run_debug(
         with log_file.open("w", encoding="utf-8") as fh:
             proc = subprocess.Popen(
                 full_cmd,
-                shell=True,
+                shell=use_shell,
                 executable=exec_shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

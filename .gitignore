@@ -36,6 +36,7 @@ htmlcov/
 *.log
 nosetests.xml
 test-results/
+tests
 
 # ── Type Checking ─────────────────────────────────────────────────────────────
 .mypy_cache/

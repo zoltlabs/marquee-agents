@@ -195,7 +195,7 @@ def _wait_for_keypress(prompt: str) -> bool:
 def write_log(step_log: StepLog, cwd: Path) -> Path:
     """Write the accumulated log to cwd. Returns the log file path."""
     ts = step_log.started.strftime("%Y%m%d_%H%M%S")
-    path = cwd / f"{step_log.command}_{ts}.log"
+    path = cwd / f"qa-agent_{step_log.command}_{ts}.log"
     step_log.write(path)
     return path
 
