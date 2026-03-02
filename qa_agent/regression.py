@@ -19,7 +19,7 @@ from qa_agent.output import (
     bold, cyan, dim, green, red, rule, yellow,
     print_header, confirm, stream_with_esc_monitor
 )
-from qa_agent.step_gate import StepLog, write_log
+from qa_agent.step_gate import StepLog, write_log, step_gate
 
 PACKAGE_DIR: Path = Path(__file__).resolve().parent.parent
 
@@ -242,7 +242,8 @@ def run(
     # Step 3: Run regression
     print()
     print(rule())
-    print(f"  {cyan(f'Running {'Slurm' if slurm else 'Basic'} Regression')}")
+    mode_str = "Slurm" if slurm else "Basic"
+    print(f"  {cyan(f'Running {mode_str} Regression')}")
     print(rule())
     print()
 
