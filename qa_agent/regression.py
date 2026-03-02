@@ -36,9 +36,13 @@ def _run_regression(
 
     exec_shell = None
     if source_file and source_file.exists():
-        shell_cmd = f"source {source_file.resolve()} && {' '.join(cmd)}"
+        pcie_dir = source_file.parent.resolve()
+        tgt_dir = target_dir.resolve()
         if source_file.suffix in {'.csh', '.tcsh'}:
             exec_shell = '/bin/csh' if os.path.exists('/bin/csh') else 'csh'
+            shell_cmd = f"cd {pcie_dir} ; source {source_file.name} ; cd {tgt_dir} ; {' '.join(cmd)}"
+        else:
+            shell_cmd = f"cd {pcie_dir} && source {source_file.name} && cd {tgt_dir} && {' '.join(cmd)}"
     else:
         shell_cmd = " ".join(cmd)
 

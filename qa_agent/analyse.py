@@ -396,9 +396,13 @@ def _run_debug(
 
     exec_shell = None
     if source_file:
-        full_cmd = f"source {source_file} && \\\n{cmd}"
+        pcie_dir = source_file.parent.resolve()
+        tgt_dir = debug_dir.resolve()
         if source_file.suffix in {'.csh', '.tcsh'}:
             exec_shell = '/bin/csh' if os.path.exists('/bin/csh') else 'csh'
+            full_cmd = f"cd {pcie_dir} ; source {source_file.name} ; cd {tgt_dir} ; \\\n{cmd}"
+        else:
+            full_cmd = f"cd {pcie_dir} && source {source_file.name} && cd {tgt_dir} && \\\n{cmd}"
     else:
         full_cmd = cmd
 
