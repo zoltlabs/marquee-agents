@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import signal
@@ -393,8 +394,11 @@ def _run_debug(
     log_file = debug_dir / "debug.log"
     cmd = result.debug_command(script)
 
+    exec_shell = None
     if source_file:
         full_cmd = f"source {source_file} && \\\n{cmd}"
+        if source_file.suffix in {'.csh', '.tcsh'}:
+            exec_shell = shutil.which("csh") or shutil.which("tcsh")
     else:
         full_cmd = cmd
 
@@ -410,6 +414,7 @@ def _run_debug(
             proc = subprocess.Popen(
                 full_cmd,
                 shell=True,
+                executable=exec_shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=str(debug_dir),

@@ -34,8 +34,12 @@ def _run_regression(
     mode_label = "slurm" if slurm else "basic"
     log_path = target_dir / f"regression_{mode_label}_{timestamp}.log"
 
+    exec_shell = None
     if source_file and source_file.exists():
         shell_cmd = f"source {source_file.resolve()} && {' '.join(cmd)}"
+        if source_file.suffix in {'.csh', '.tcsh'}:
+            import shutil
+            exec_shell = shutil.which("csh") or shutil.which("tcsh")
     else:
         shell_cmd = " ".join(cmd)
 
@@ -53,6 +57,7 @@ def _run_regression(
             proc = subprocess.Popen(
                 shell_cmd,
                 shell=True,
+                executable=exec_shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=str(target_dir),
