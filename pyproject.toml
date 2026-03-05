@@ -11,6 +11,7 @@ dependencies = [
     "python-dotenv",
     "platformdirs",
     "rich>=13.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

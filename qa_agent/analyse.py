@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from qa_agent.config import find_config, load_config, CONFIG_FILENAME, DEFAULT_EP_FIXED_FLAGS, DEFAULT_RC_FIXED_FLAGS
 from qa_agent.errors import PathError, QAAgentError
 from qa_agent.output import bold, cyan, dim, green, red, rule, yellow, print_header, arrow_select, confirm, stream_with_esc_monitor
 from qa_agent.step_gate import StepLog, step_gate, write_log
@@ -179,8 +180,16 @@ class TestResult:
         """Return the expanded +define+ simulator flags for -R (EP or RC flavour)."""
         return _build_config_flags(self.sys_ele, self.gen, self.num_lane, self.flit_mode, self.typ)
 
-    def debug_command(self, script: str) -> str:
+    def debug_command(
+        self,
+        script: str,
+        ep_extra: list[str] | None = None,
+        rc_extra: list[str] | None = None,
+    ) -> str:
         """Return the full debug invocation command for this test result.
+
+        ep_extra / rc_extra are additional fixed flags merged from qa-agent.yaml.
+        If None, falls back to DEFAULT_EP_FIXED_FLAGS / DEFAULT_RC_FIXED_FLAGS.
 
         EP format:  -T $SIG_PCIE_AVERY_TOP/sipc_top_ep1.sv
         RC format:  -T $SIG_PCIE_AVERY_TOP/sipc_top_rc1.sv  (sys_ele in filename)
@@ -188,11 +197,25 @@ class TestResult:
         effective_script = script or DEFAULT_SCRIPT
         test_file = self.test if self.test.endswith(".sv") else f"{self.test}.sv"
         top_sv = f"$SIG_PCIE_AVERY_TOP/sipc_top_{self.sys_ele}.sv"
+
+        # Merge the config-provided fixed flags with the dynamic config flags
+        base_flags = self.config_flags  # dynamic part (lanes, gen, flit_mode, width)
+        if self.is_rc:
+            extra = ep_extra if ep_extra is not None else list(DEFAULT_RC_FIXED_FLAGS)
+        else:
+            extra = ep_extra if ep_extra is not None else list(DEFAULT_EP_FIXED_FLAGS)
+
+        # Deduplicate: dynamic flags take precedence
+        all_flags = base_flags
+        for f in extra:
+            if f not in all_flags:
+                all_flags = all_flags + " " + f
+
         return (
             f"{effective_script} -t {test_file} -s mti64 -visualizer -debug"
             f" -T {top_sv}"
             f" -file $SIG_PCIE_HOME/RTL/PCIeCore/sig_pcie_core_16B.f"
-            f' -R " {self.config_flags}" -n {self.seed}'
+            f' -R " {all_flags}" -n {self.seed}'
         )
 
 
@@ -385,6 +408,8 @@ def _run_debug(
     index: int,
     total: int,
     verbose: bool = False,
+    ep_extra: list[str] | None = None,
+    rc_extra: list[str] | None = None,
 ) -> DebugOutcome:
     """Build and execute the full debug command for one failure.
 
@@ -392,7 +417,7 @@ def _run_debug(
     Returns DebugOutcome regardless of success/failure/timeout.
     """
     log_file = debug_dir / "debug.log"
-    cmd = result.debug_command(script)
+    cmd = result.debug_command(script, ep_extra=ep_extra, rc_extra=rc_extra)
 
     exec_shell = None
     use_shell = True
@@ -605,9 +630,22 @@ def run(
     log: object = None,
 ) -> None:
     wd = Path(working_dir).resolve()
-    package_dir = Path(__file__).parent  # qa_agent/
 
     print_header("analyse", f"Mode: {mode or 'auto-detect'}")
+
+    # ── Load project config ────────────────────────────────────────────────────
+    from qa_agent.errors import ConfigError
+    cfg_path = find_config(wd)
+    if cfg_path is None:
+        raise ConfigError(
+            f"No {CONFIG_FILENAME} found. Run  qa-agent init  to create one."
+        )
+    cfg = load_config(cfg_path)
+    print(f"  {dim('Using config:')} {dim(str(cfg_path))}")
+    print()
+
+    ep_extra = cfg.ep_fixed_flags
+    rc_extra = cfg.rc_fixed_flags
 
     effective_mode = "basic"  # will be set during parsing
     step_log = StepLog(command="analyse", mode="basic")
@@ -623,24 +661,21 @@ def run(
 
     # ── Step 1: find and read results file ────────────────────────────────────
     with step_gate(1, "Read results file", debug, step_log) as ctx:
-        results_path = _find_results(wd)
-        
-        # Check for sig_pcie in the path
-        sig_pcie_dir = None
-        for parent in wd.parents:
-            if parent.name == "sig_pcie":
-                sig_pcie_dir = parent
+        # Use config-defined output filenames for detection
+        result_candidates = [cfg.basic_output, cfg.slurm_output]
+        results_path = None
+        for name in result_candidates:
+            p = wd / name
+            if p.exists():
+                results_path = p
                 break
-        if wd.name == "sig_pcie":
-            sig_pcie_dir = wd
-            
-        if not sig_pcie_dir:
-            ctx.fail("sig_pcie not found in the current working directory path.")
-            
-        if sig_pcie_dir and "sig_pcie/verif/AVERY/run/results" not in wd.as_posix():
-             ctx.fail("cwd must be within sig_pcie/verif/AVERY/run/results.")
-             
-        ctx.detail = f"Path: {results_path}"
+        if results_path is None:
+            ctx.fail(
+                f"No results file found in {wd}.\n"
+                f"  Expected: {' or '.join(result_candidates)}"
+            )
+        else:
+            ctx.detail = f"Path: {results_path}"
     if not ctx.ok:
         log_path = write_log(step_log, wd)
         print(f"\n  {cyan('ℹ')}  Log: {log_path}")
@@ -704,31 +739,38 @@ def run(
     unique_failing = len({r.test for r in failed})
     print(f"\n  Found {bold(str(len(failed)))} failed test(s) across {bold(str(unique_failing))} unique test name(s).\n")
 
-    # ── Step 4: Find sig_pcie source and script ───────────────────────────────
+    # ── Step 4: Locate source file and debug script from config ───────────────
     step_offset = 1 if test_filter else 0
     with step_gate(3 + step_offset, "Locate source file and script", debug, step_log) as ctx:
-        if sig_pcie_dir:
-            source_file = sig_pcie_dir / "sourcefile_2025_3.csh"
-            if not source_file.exists():
-                source_file = None
-            
-            pl_script = sig_pcie_dir / "verif/AVERY/run/run_apci_2025.pl"
-            if pl_script.exists():
-                effective_script = str(pl_script)
+        source_file = cfg.source_file_path
+        if source_file and not source_file.exists():
+            print(f"  {yellow('⚠')}  source_file from config not found: {source_file}")
+            source_file = None
+
+        if not script:
+            ds = cfg.debug_script_path
+            if ds and ds.exists():
+                effective_script = str(ds)
+            elif ds:
+                print(f"  {yellow('⚠')}  debug_script from config not found: {ds}")
+                effective_script = ""
             else:
                 effective_script = ""
-                
-            ctx.detail = f"source: {source_file.name if source_file else 'None'}, script: {Path(effective_script).name if effective_script else 'None'}"
         else:
-            ctx.fail("sig_pcie_dir is somehow missing.")
-            
+            effective_script = script
+
+        ctx.detail = (
+            f"source: {source_file.name if source_file else 'None'}, "
+            f"script: {Path(effective_script).name if effective_script else 'None'}"
+        )
+
     if not ctx.ok:
         log_path = write_log(step_log, wd)
         print(f"\n  {cyan('ℹ')}  Log: {log_path}")
         return
-        
-    print(f"  {green('✓')}  Using source file: {source_file if source_file else 'None'}")
-    print(f"  {green('✓')}  Using script: {effective_script if effective_script else 'None'}")
+
+    print(f"  {green('✓')}  Using source file: {source_file if source_file else dim('(none)')}")
+    print(f"  {green('✓')}  Using script: {effective_script if effective_script else dim('(none)')}")
 
     # ── Step 5: create debug directories ──────────────────────────────────────
     if failed:
@@ -757,6 +799,8 @@ def run(
                 outcome = _run_debug(
                     result, debug_dirs[result], effective_script, source_file, i, len(failed),
                     verbose=verbose,
+                    ep_extra=ep_extra,
+                    rc_extra=rc_extra,
                 )
                 ctx.detail = f"exit={outcome.exit_code}"
                 if outcome.timed_out:
