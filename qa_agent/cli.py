@@ -138,6 +138,12 @@ def main() -> None:
         default=False,
         help="Print detailed progress to stdout (debug dirs, command text, etc.).",
     )
+    analyse_parser.add_argument(
+        "--cmd",
+        action="store_true",
+        default=False,
+        help="Print the generated debug commands for each failure and exit (no runs, no report).",
+    )
 
     # ── regression ────────────────────────────────────────────────────────────
     regression_parser = subparsers.add_parser(
@@ -285,6 +291,7 @@ def main() -> None:
                 test_filter=args.test,
                 verbose=args.verbose,
                 debug=args.debug,
+                cmd_only=args.cmd,
                 log=log,
             )
 

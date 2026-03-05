@@ -30,12 +30,16 @@ CONFIG_FILENAME = "qa-agent.yaml"
 DEFAULT_EP_FIXED_FLAGS: list[str] = [
     "+define+SIPC_FASTER_MS_TICK",
     "+define+GEN6_MAX_WIDTH_8",
+    "+define+PIPE_BYTEWIDTH_16",
+    "+define+APCI_MAX_DATA_WIDTH=16",
     "+licq",
 ]
 
 DEFAULT_RC_FIXED_FLAGS: list[str] = [
     "+define+SIPC_FASTER_MS_TICK",
     "+define+ROUTINE_RC",
+    "+define+PIPE_BYTEWIDTH_16",
+    "+define+APCI_MAX_DATA_WIDTH=16",
     "+licq",
     "+define+RC_INITIATING_SPEED_CHANGE",
 ]

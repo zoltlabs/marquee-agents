@@ -80,43 +80,35 @@ def _is_rc(sys_ele: str) -> bool:
     return sys_ele.lower().startswith("rc")
 
 
-def _data_width_flags(typ: str) -> tuple[str, str]:
-    """Return (PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH) defines derived from typ (e.g. '4B')."""
-    m = re.search(r"(\d+)B", typ.upper())
-    if m:
-        bus_bytes = int(m.group(1))       # 4B → 4
-        width = bus_bytes * 4             # 4 → 16, 8 → 32
-        return f"+define+PIPE_BYTEWIDTH_{width}", f"+define+APCI_MAX_DATA_WIDTH={width}"
-    return "+define+PIPE_BYTEWIDTH_16", "+define+APCI_MAX_DATA_WIDTH=16"
-
-
-def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str, typ: str) -> str:
+def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str) -> str:
     """Expand parsed config fields into the +define+ simulator flag string for -R.
 
-    EP example (sys_ele=ep1, gen=GEN5, num_lane=4, flit_mode=NON_FLIT, typ=4B):
-        +define+APCI_NUM_LANES=4 +apci_gen5 +define+SIPC_GEN5
-        +define+SIPC_USE_NON_FLIT_MODE +define+SIPC_FASTER_MS_TICK
-        +define+GEN3_MAX_WIDTH_4 +define+GEN4_MAX_WIDTH_4
-        +define+GEN5_MAX_WIDTH_4 +define+GEN6_MAX_WIDTH_8
-        +define+PIPE_BYTEWIDTH_16 +define+APCI_MAX_DATA_WIDTH=16
-        +define+GEN1_2_MAX_WIDTH_4 +licq
+    NOTE: PIPE_BYTEWIDTH and APCI_MAX_DATA_WIDTH are project-fixed constants.
+    They must be configured in ep_fixed_flags / rc_fixed_flags in qa-agent.yaml
+    rather than computed dynamically from the results file.
 
-    RC example (sys_ele=rc1, gen=GEN5, num_lane=4, flit_mode=NON_FLIT, typ=4B):
-        +define+SIPC_NUM_LANES=4 +define+APCI_NUM_LANES=4 +apci_gen5 +define+SIPC_GEN5
-        +define+SIPC_USE_NON_FLIT_MODE +define+SIPC_FASTER_MS_TICK +define+ROUTINE_RC
-        +define+GEN1_2_MAX_WIDTH_4 +define+PIPE_BYTEWIDTH_16 +define+APCI_MAX_DATA_WIDTH=16
-        +licq +define+RC_INITIATING_SPEED_CHANGE
+    EP example (sys_ele=ep1, gen=GEN6, num_lane=4, flit_mode=FLIT):
+        +define+APCI_NUM_LANES=4 +apci_gen6 +define+SIPC_GEN6
+        +define+SIPC_USE_FLIT_MODE
+        +define+GEN3_MAX_WIDTH_4 +define+GEN4_MAX_WIDTH_4
+        +define+GEN5_MAX_WIDTH_4 +define+GEN1_2_MAX_WIDTH_4
+        (width flags come from ep_fixed_flags in YAML)
+
+    RC example (sys_ele=rc1, gen=GEN6, num_lane=4, flit_mode=FLIT):
+        +define+SIPC_NUM_LANES=4 +define+APCI_NUM_LANES=4 +apci_gen6 +define+SIPC_GEN6
+        +define+SIPC_USE_FLIT_MODE
+        +define+GEN1_2_MAX_WIDTH_4
+        (width flags come from rc_fixed_flags in YAML)
     """
     rc = _is_rc(sys_ele)
-    gen_upper = gen.upper()   # e.g. GEN5
-    gen_lower = gen.lower()   # e.g. gen5
+    gen_upper = gen.upper()   # e.g. GEN6
+    gen_lower = gen.lower()   # e.g. gen6
     fm_upper  = flit_mode.upper()
-    pb, adw   = _data_width_flags(typ)
 
     flags: list[str] = []
 
     if rc:
-        # ── RC flag order ──────────────────────────────────────────────────────────────────
+        # ── RC flag order ──────────────────────────────────────────────────────
         flags.append(f"+define+SIPC_NUM_LANES={num_lane}")
         flags.append(f"+define+APCI_NUM_LANES={num_lane}")
         flags.append(f"+apci_{gen_lower}")
@@ -125,15 +117,9 @@ def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str, t
             flags.append("+define+SIPC_USE_NON_FLIT_MODE")
         else:
             flags.append("+define+SIPC_USE_FLIT_MODE")
-        flags.append("+define+SIPC_FASTER_MS_TICK")
-        flags.append("+define+ROUTINE_RC")
         flags.append(f"+define+GEN1_2_MAX_WIDTH_{num_lane}")
-        flags.append(pb)
-        flags.append(adw)
-        flags.append("+licq")
-        flags.append("+define+RC_INITIATING_SPEED_CHANGE")
     else:
-        # ── EP flag order ─────────────────────────────────────────────────────────────────
+        # ── EP flag order ─────────────────────────────────────────────────────
         flags.append(f"+define+APCI_NUM_LANES={num_lane}")
         flags.append(f"+apci_{gen_lower}")
         flags.append(f"+define+SIPC_{gen_upper}")
@@ -141,15 +127,10 @@ def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str, t
             flags.append("+define+SIPC_USE_NON_FLIT_MODE")
         else:
             flags.append("+define+SIPC_USE_FLIT_MODE")
-        flags.append("+define+SIPC_FASTER_MS_TICK")
         flags.append(f"+define+GEN3_MAX_WIDTH_{num_lane}")
         flags.append(f"+define+GEN4_MAX_WIDTH_{num_lane}")
         flags.append(f"+define+GEN5_MAX_WIDTH_{num_lane}")
-        flags.append("+define+GEN6_MAX_WIDTH_8")
-        flags.append(pb)
-        flags.append(adw)
         flags.append(f"+define+GEN1_2_MAX_WIDTH_{num_lane}")
-        flags.append("+licq")
 
     return " ".join(flags)
 
@@ -181,8 +162,13 @@ class TestResult:
 
     @property
     def config_flags(self) -> str:
-        """Return the expanded +define+ simulator flags for -R (EP or RC flavour)."""
-        return _build_config_flags(self.sys_ele, self.gen, self.num_lane, self.flit_mode, self.typ)
+        """Return the dynamic +define+ simulator flags for -R (EP or RC flavour).
+
+        Width flags (PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH) are intentionally
+        excluded here — they are project-fixed constants that come from
+        ep_fixed_flags / rc_fixed_flags in qa-agent.yaml.
+        """
+        return _build_config_flags(self.sys_ele, self.gen, self.num_lane, self.flit_mode)
 
     def debug_command(
         self,
@@ -192,7 +178,10 @@ class TestResult:
     ) -> str:
         """Return the full debug invocation command for this test result.
 
-        ep_extra / rc_extra are additional fixed flags merged from qa-agent.yaml.
+        ep_extra / rc_extra are project-fixed flags from qa-agent.yaml
+        (typically PIPE_BYTEWIDTH and APCI_MAX_DATA_WIDTH). They are
+        inserted inline at the correct position in the flag sequence.
+
         If None, falls back to DEFAULT_EP_FIXED_FLAGS / DEFAULT_RC_FIXED_FLAGS.
 
         EP format:  -T $SIG_PCIE_AVERY_TOP/sipc_top_ep1.sv
@@ -202,18 +191,15 @@ class TestResult:
         test_file = self.test if self.test.endswith(".sv") else f"{self.test}.sv"
         top_sv = f"$SIG_PCIE_AVERY_TOP/sipc_top_{self.sys_ele}.sv"
 
-        # Merge the config-provided fixed flags with the dynamic config flags
-        base_flags = self.config_flags  # dynamic part (lanes, gen, flit_mode, width)
         if self.is_rc:
             extra = rc_extra if rc_extra is not None else list(DEFAULT_RC_FIXED_FLAGS)
         else:
             extra = ep_extra if ep_extra is not None else list(DEFAULT_EP_FIXED_FLAGS)
 
-        # Deduplicate: skip extras already present in the dynamic flags string
-        all_flags = base_flags
-        for f in extra:
-            if f not in all_flags:
-                all_flags = all_flags + " " + f
+        all_flags = _build_config_flags(
+            self.sys_ele, self.gen, self.num_lane, self.flit_mode,
+            extra_flags=extra,
+        )
 
         return (
             f"{effective_script} -t {test_file} -s mti64 -visualizer -debug"
@@ -631,11 +617,13 @@ def run(
     test_filter: str | None = None,
     verbose: bool = False,
     debug: bool = False,
+    cmd_only: bool = False,
     log: object = None,
 ) -> None:
     wd = Path(working_dir).resolve()
 
-    print_header("analyse", f"Mode: {mode or 'auto-detect'}")
+    if not cmd_only:
+        print_header("analyse", f"Mode: {mode or 'auto-detect'}")
 
     # ── Load project config ────────────────────────────────────────────────────
     from qa_agent.errors import ConfigError
@@ -645,8 +633,9 @@ def run(
             f"No {CONFIG_FILENAME} found. Run  qa-agent init  to create one."
         )
     cfg = load_config(cfg_path)
-    print(f"  {dim('Using config:')} {dim(str(cfg_path))}")
-    print()
+    if not cmd_only:
+        print(f"  {dim('Using config:')} {dim(str(cfg_path))}")
+        print()
 
     ep_extra = cfg.ep_fixed_flags
     rc_extra = cfg.rc_fixed_flags
@@ -685,7 +674,8 @@ def run(
         print(f"\n  {cyan('ℹ')}  Log: {log_path}")
         return
 
-    print(f"\n  {green('✓')}  Reading results from: {results_path}")
+    if not cmd_only:
+        print(f"\n  {green('✓')}  Reading results from: {results_path}")
 
     # ── Step 2: detect mode & parse ───────────────────────────────────────────
     with step_gate(2, "Parse results", debug, step_log) as ctx:
@@ -725,23 +715,25 @@ def run(
             print(f"\n  {cyan('ℹ')}  Log: {log_path}")
             raise QAAgentError(ctx.error)
 
-        print(f"  {yellow('⚑')}  --test filter active: "
-              f"focusing on '{bold(test_filter)}' "
-              f"{dim(f'({len(failed)} match(es))')}")
+        if not cmd_only:
+            print(f"  {yellow('⚑')}  --test filter active: "
+                  f"focusing on '{bold(test_filter)}' "
+                  f"{dim(f'({len(failed)} match(es))')}")
 
-    # Banner
-    print()
-    print(rule())
-    print(f"  {cyan('qa-agent analyse')}  {dim('·')}  {bold(results_path.name)}  {dim(f'[{effective_mode}]')}")
-    print(
-        f"  {green(f'Passed: {len(passed)}')}   "
-        f"{(red if failed else dim)(f'Failed: {len(failed)}')}"
-        + (f"  {dim(f'(filtered to: {test_filter})')}" if test_filter else "")
-    )
-    print(rule())
+    if not cmd_only:
+        # Banner
+        print()
+        print(rule())
+        print(f"  {cyan('qa-agent analyse')}  {dim('·')}  {bold(results_path.name)}  {dim(f'[{effective_mode}]')}")
+        print(
+            f"  {green(f'Passed: {len(passed)}')}   "
+            f"{(red if failed else dim)(f'Failed: {len(failed)}')}"
+            + (f"  {dim(f'(filtered to: {test_filter})')}" if test_filter else "")
+        )
+        print(rule())
 
-    unique_failing = len({r.test for r in failed})
-    print(f"\n  Found {bold(str(len(failed)))} failed test(s) across {bold(str(unique_failing))} unique test name(s).\n")
+        unique_failing = len({r.test for r in failed})
+        print(f"\n  Found {bold(str(len(failed)))} failed test(s) across {bold(str(unique_failing))} unique test name(s).\n")
 
     # ── Step 4: Locate source file and debug script from config ───────────────
     step_offset = 1 if test_filter else 0
@@ -773,8 +765,15 @@ def run(
         print(f"\n  {cyan('ℹ')}  Log: {log_path}")
         return
 
-    print(f"  {green('✓')}  Using source file: {source_file if source_file else dim('(none)')}")
-    print(f"  {green('✓')}  Using script: {effective_script if effective_script else dim('(none)')}")
+    if not cmd_only:
+        print(f"  {green('✓')}  Using source file: {source_file if source_file else dim('(none)')}")
+        print(f"  {green('✓')}  Using script: {effective_script if effective_script else dim('(none)')}")
+
+    # ── --cmd mode: print debug commands and exit ─────────────────────────────
+    if cmd_only:
+        for result in failed:
+            print(result.debug_command(effective_script, ep_extra=ep_extra, rc_extra=rc_extra))
+        return
 
     # ── Step 5: create debug directories ──────────────────────────────────────
     if failed:
