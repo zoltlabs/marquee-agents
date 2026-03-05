@@ -550,8 +550,128 @@ def _print_summary(cfg: QAConfig) -> None:
 
 # ── Public entry-point ────────────────────────────────────────────────────────
 
-def run(root: Optional[str] = None, force: bool = False, verbose: bool = False) -> None:
+def run(root: Optional[str] = None, force: bool = False, use_defaults: bool = False, verbose: bool = False) -> None:
     print_header("init", "Project Config Wizard")
+
+    # ── --use_defaults: fully automated path ───────────────────────────────────
+    if use_defaults:
+        print(f"  {dim('--use-defaults mode: auto-detecting all paths, no prompts.')}\n")
+
+        # 1. Project root
+        rtl_parent = _find_rtl_parent(Path.cwd())
+        project_root = Path(root).expanduser().resolve() if root else (rtl_parent or Path.cwd().resolve())
+        _ok("Project root", str(project_root))
+
+        # 2. Results dir — look for run/results pattern
+        result_dirs = [p for p in _walk_find(project_root, "results", max_depth=8) if p.is_dir()]
+        result_dirs.sort(key=lambda p: ("run/results" in p.as_posix().lower(), len(p.parts)), reverse=True)
+        if result_dirs:
+            try:
+                results_dir = str(result_dirs[0].resolve().relative_to(project_root))
+            except ValueError:
+                results_dir = str(result_dirs[0])
+        else:
+            results_dir = "verif/AVERY/run/results"
+        _ok("Results dir", results_dir)
+
+        # 3. Source file
+        src_cands = _walk_find(project_root, "sourcefile_2025_3.csh", max_depth=6)
+        src_cands = [p for p in src_cands if p.is_file()]
+        if src_cands:
+            try:
+                source_file = str(src_cands[0].resolve().relative_to(project_root))
+            except ValueError:
+                source_file = str(src_cands[0])
+            _ok("Source file", source_file)
+        else:
+            source_file = ""
+            _warn("Source file", "(not found)")
+
+        # 4. Basic regression script
+        basic_cands = _walk_find(project_root, "regression_8B_16B_questa.py", max_depth=6)
+        basic_cands = [p for p in basic_cands if p.is_file()]
+        if not basic_cands:
+            basic_cands = [p for p in _walk_glob(project_root, "regression_*.py", max_depth=6)
+                           if p.is_file() and "slurm" not in p.name.lower()]
+        if basic_cands:
+            try:
+                basic_script = str(basic_cands[0].resolve().relative_to(project_root))
+            except ValueError:
+                basic_script = str(basic_cands[0])
+            _ok("Basic regression script", basic_script)
+        else:
+            basic_script = ""
+            _warn("Basic regression script", "(not found)")
+
+        # 5. Slurm files
+        def _auto_find(name: str, glob: str, extra_filter=None) -> str:
+            cands = _walk_find(project_root, name, max_depth=6)
+            if not cands:
+                cands = _walk_glob(project_root, glob, max_depth=6)
+            cands = [p for p in cands if p.is_file()]
+            if extra_filter:
+                cands = [p for p in cands if extra_filter(p)]
+            if not cands:
+                return ""
+            try:
+                return str(cands[0].resolve().relative_to(project_root))
+            except ValueError:
+                return str(cands[0])
+
+        slurm_script = _auto_find("regression_slurm_questa_2025.py", "regression_slurm_*.py",
+                                   lambda p: "slurm" in p.name.lower())
+        slurm_run = _auto_find("run_questa.sh", "run_questa*.sh")
+        slurm_cfg = _auto_find("config.txt", "config.txt")
+        _ok("Slurm regression script", slurm_script or dim("(not found)"))
+        _ok("Slurm run script",        slurm_run    or dim("(not found)"))
+        _ok("Slurm config",            slurm_cfg    or dim("(not found)"))
+
+        # 6. Debug script
+        debug_cands = _walk_find(project_root, "run_apci_2025.pl", max_depth=6)
+        debug_cands = [p for p in debug_cands if p.is_file()]
+        if debug_cands:
+            try:
+                debug_script = str(debug_cands[0].resolve().relative_to(project_root))
+            except ValueError:
+                debug_script = str(debug_cands[0])
+            _ok("Debug script", debug_script)
+        else:
+            debug_script = ""
+            _warn("Debug script", "(not found)")
+
+        cfg = QAConfig(
+            project_name             = project_root.name,
+            project_root             = str(project_root),
+            results_dir              = results_dir,
+            source_file              = source_file,
+            basic_regression_script  = basic_script,
+            slurm_regression_script  = slurm_script,
+            slurm_run_script         = slurm_run,
+            slurm_config             = slurm_cfg,
+            debug_script             = debug_script,
+            basic_output             = "results.doc",
+            slurm_output             = "results_new.doc",
+            ep_fixed_flags           = list(DEFAULT_EP_FIXED_FLAGS),
+            rc_fixed_flags           = list(DEFAULT_RC_FIXED_FLAGS),
+        )
+
+        save_path = project_root / CONFIG_FILENAME
+        if save_path.exists() and not force:
+            print(f"\n  {yellow('⚠')}  Config already exists: {bold(str(save_path))}")
+            print(f"  {dim('Use --force to overwrite.')}\n")
+            return
+
+        try:
+            save_config(cfg, save_path)
+        except Exception as exc:
+            print(f"\n  {red('✖')}  Failed to save: {exc}\n")
+            return
+
+        print()
+        print(f"  {green('✓')}  Config saved:  {bold(str(save_path))}")
+        print(f"  {dim('Edit anytime with:')}  qa-agent config")
+        print()
+        return
 
     # Check for existing config
     existing = find_config(Path.cwd())

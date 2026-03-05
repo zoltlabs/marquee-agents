@@ -80,35 +80,43 @@ def _is_rc(sys_ele: str) -> bool:
     return sys_ele.lower().startswith("rc")
 
 
-def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str) -> str:
-    """Expand parsed config fields into the +define+ simulator flag string for -R.
+def _build_full_flags(
+    sys_ele: str,
+    gen: str,
+    num_lane: str,
+    flit_mode: str,
+    extra_flags: list[str] | None = None,
+) -> str:
+    """Build the complete +define+ flag string with extra flags inserted inline.
 
-    NOTE: PIPE_BYTEWIDTH and APCI_MAX_DATA_WIDTH are project-fixed constants.
-    They must be configured in ep_fixed_flags / rc_fixed_flags in qa-agent.yaml
-    rather than computed dynamically from the results file.
+    `extra_flags` (PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH from qa-agent.yaml) are
+    inserted at the correct position — after GEN5/GEN6_MAX_WIDTH_8 for EP,
+    after ROUTINE_RC for RC — producing the exact expected command output.
 
-    EP example (sys_ele=ep1, gen=GEN6, num_lane=4, flit_mode=FLIT):
-        +define+APCI_NUM_LANES=4 +apci_gen6 +define+SIPC_GEN6
-        +define+SIPC_USE_FLIT_MODE
-        +define+GEN3_MAX_WIDTH_4 +define+GEN4_MAX_WIDTH_4
-        +define+GEN5_MAX_WIDTH_4 +define+GEN1_2_MAX_WIDTH_4
-        (width flags come from ep_fixed_flags in YAML)
+    EP output (ep1, GEN6, lane4, FLIT, extras=[+define+PIPE_BYTEWIDTH_16, +define+APCI_MAX_DATA_WIDTH=16]):
+        +define+APCI_NUM_LANES=4 +apci_gen6 +define+SIPC_GEN6 +define+SIPC_USE_FLIT_MODE
+        +define+SIPC_FASTER_MS_TICK +define+GEN3_MAX_WIDTH_4 +define+GEN4_MAX_WIDTH_4
+        +define+GEN5_MAX_WIDTH_4 +define+GEN6_MAX_WIDTH_8
+        +define+PIPE_BYTEWIDTH_16 +define+APCI_MAX_DATA_WIDTH=16
+        +define+GEN1_2_MAX_WIDTH_4 +licq
 
-    RC example (sys_ele=rc1, gen=GEN6, num_lane=4, flit_mode=FLIT):
+    RC output (rc1, GEN6, lane4, FLIT, extras=[+define+PIPE_BYTEWIDTH_16, +define+APCI_MAX_DATA_WIDTH=16]):
         +define+SIPC_NUM_LANES=4 +define+APCI_NUM_LANES=4 +apci_gen6 +define+SIPC_GEN6
-        +define+SIPC_USE_FLIT_MODE
+        +define+SIPC_USE_FLIT_MODE +define+SIPC_FASTER_MS_TICK +define+ROUTINE_RC
         +define+GEN1_2_MAX_WIDTH_4
-        (width flags come from rc_fixed_flags in YAML)
+        +define+PIPE_BYTEWIDTH_16 +define+APCI_MAX_DATA_WIDTH=16
+        +licq +define+RC_INITIATING_SPEED_CHANGE
     """
     rc = _is_rc(sys_ele)
-    gen_upper = gen.upper()   # e.g. GEN6
-    gen_lower = gen.lower()   # e.g. gen6
+    gen_upper = gen.upper()
+    gen_lower = gen.lower()
     fm_upper  = flit_mode.upper()
+    extras    = list(extra_flags) if extra_flags else []
 
     flags: list[str] = []
 
     if rc:
-        # ── RC flag order ──────────────────────────────────────────────────────
+        # ── RC flag order ──────────────────────────────────────────────────────────
         flags.append(f"+define+SIPC_NUM_LANES={num_lane}")
         flags.append(f"+define+APCI_NUM_LANES={num_lane}")
         flags.append(f"+apci_{gen_lower}")
@@ -117,7 +125,12 @@ def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str) -
             flags.append("+define+SIPC_USE_NON_FLIT_MODE")
         else:
             flags.append("+define+SIPC_USE_FLIT_MODE")
+        flags.append("+define+SIPC_FASTER_MS_TICK")
+        flags.append("+define+ROUTINE_RC")
         flags.append(f"+define+GEN1_2_MAX_WIDTH_{num_lane}")
+        flags.extend(extras)               # PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH
+        flags.append("+licq")
+        flags.append("+define+RC_INITIATING_SPEED_CHANGE")
     else:
         # ── EP flag order ─────────────────────────────────────────────────────
         flags.append(f"+define+APCI_NUM_LANES={num_lane}")
@@ -127,12 +140,26 @@ def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str) -
             flags.append("+define+SIPC_USE_NON_FLIT_MODE")
         else:
             flags.append("+define+SIPC_USE_FLIT_MODE")
+        flags.append("+define+SIPC_FASTER_MS_TICK")
         flags.append(f"+define+GEN3_MAX_WIDTH_{num_lane}")
         flags.append(f"+define+GEN4_MAX_WIDTH_{num_lane}")
         flags.append(f"+define+GEN5_MAX_WIDTH_{num_lane}")
+        flags.append("+define+GEN6_MAX_WIDTH_8")
+        flags.extend(extras)               # PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH
         flags.append(f"+define+GEN1_2_MAX_WIDTH_{num_lane}")
+        flags.append("+licq")
 
     return " ".join(flags)
+
+
+# Keep _build_config_flags as a compatibility alias (used by config_flags property)
+def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str) -> str:
+    """Return only the dynamic (non-width) portion of the flag string.
+    
+    Width flags come from ep_fixed_flags / rc_fixed_flags in qa-agent.yaml.
+    For the full command string use _build_full_flags() instead.
+    """
+    return _build_full_flags(sys_ele, gen, num_lane, flit_mode, extra_flags=None)
 
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -196,7 +223,7 @@ class TestResult:
         else:
             extra = ep_extra if ep_extra is not None else list(DEFAULT_EP_FIXED_FLAGS)
 
-        all_flags = _build_config_flags(
+        all_flags = _build_full_flags(
             self.sys_ele, self.gen, self.num_lane, self.flit_mode,
             extra_flags=extra,
         )
