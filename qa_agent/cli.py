@@ -205,10 +205,9 @@ def main() -> None:
         help="Overwrite existing qa-agent.yaml without prompting.",
     )
     init_parser.add_argument(
-        "--use-defaults",
+        "--use_defaults",
         action="store_true",
         default=False,
-        dest="use_defaults",
         help="Skip interactive wizard; auto-detect paths and use all default values.",
     )
 
