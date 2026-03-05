@@ -116,13 +116,15 @@ def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str, t
     flags: list[str] = []
 
     if rc:
-        # ── RC flag order ──────────────────────────────────────────────────────
+        # ── RC flag order ──────────────────────────────────────────────────────────────────
         flags.append(f"+define+SIPC_NUM_LANES={num_lane}")
         flags.append(f"+define+APCI_NUM_LANES={num_lane}")
         flags.append(f"+apci_{gen_lower}")
         flags.append(f"+define+SIPC_{gen_upper}")
         if "NON" in fm_upper:
             flags.append("+define+SIPC_USE_NON_FLIT_MODE")
+        else:
+            flags.append("+define+SIPC_USE_FLIT_MODE")
         flags.append("+define+SIPC_FASTER_MS_TICK")
         flags.append("+define+ROUTINE_RC")
         flags.append(f"+define+GEN1_2_MAX_WIDTH_{num_lane}")
@@ -131,12 +133,14 @@ def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str, t
         flags.append("+licq")
         flags.append("+define+RC_INITIATING_SPEED_CHANGE")
     else:
-        # ── EP flag order ──────────────────────────────────────────────────────
+        # ── EP flag order ─────────────────────────────────────────────────────────────────
         flags.append(f"+define+APCI_NUM_LANES={num_lane}")
         flags.append(f"+apci_{gen_lower}")
         flags.append(f"+define+SIPC_{gen_upper}")
         if "NON" in fm_upper:
             flags.append("+define+SIPC_USE_NON_FLIT_MODE")
+        else:
+            flags.append("+define+SIPC_USE_FLIT_MODE")
         flags.append("+define+SIPC_FASTER_MS_TICK")
         flags.append(f"+define+GEN3_MAX_WIDTH_{num_lane}")
         flags.append(f"+define+GEN4_MAX_WIDTH_{num_lane}")
@@ -201,11 +205,11 @@ class TestResult:
         # Merge the config-provided fixed flags with the dynamic config flags
         base_flags = self.config_flags  # dynamic part (lanes, gen, flit_mode, width)
         if self.is_rc:
-            extra = ep_extra if ep_extra is not None else list(DEFAULT_RC_FIXED_FLAGS)
+            extra = rc_extra if rc_extra is not None else list(DEFAULT_RC_FIXED_FLAGS)
         else:
             extra = ep_extra if ep_extra is not None else list(DEFAULT_EP_FIXED_FLAGS)
 
-        # Deduplicate: dynamic flags take precedence
+        # Deduplicate: skip extras already present in the dynamic flags string
         all_flags = base_flags
         for f in extra:
             if f not in all_flags:
