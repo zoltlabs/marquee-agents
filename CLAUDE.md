@@ -86,6 +86,8 @@ marquee-agents/
 |------------|-------|-------------|--------|
 | `hello` | — | ASCII logo welcome screen + quick start | [`IMPLEMENTATION/help_and_hello.md`](./IMPLEMENTATION/help_and_hello.md) |
 | `guide` | `[COMMAND]` | Short practical user guide for any command; no arg = overview of all | [`IMPLEMENTATION/help_and_hello.md`](./IMPLEMENTATION/help_and_hello.md) |
+| `init` | `[root]` `[--force/-f]` `[--use_defaults]` | Interactive wizard: discover project files and write qa-agent.yaml | [`IMPLEMENTATION/init_and_config.md`](./IMPLEMENTATION/init_and_config.md) |
+| `config` | — | Open qa-agent.yaml in your editor ($EDITOR, default: vim) | [`IMPLEMENTATION/init_and_config.md`](./IMPLEMENTATION/init_and_config.md) |
 | `summarise` | `[PATH …]` `--provider`/`-p {claude,openai,gemini}` | Summarise files or directories using AI | [`IMPLEMENTATION/summarise.md`](./IMPLEMENTATION/summarise.md) |
 | `doctor` | `--verbose`/`-v` | Check SDKs, auth, and log system | [`IMPLEMENTATION/doctor.md`](./IMPLEMENTATION/doctor.md) |
 | `analyse` | `[--mode basic\|slurm]` `[--working-dir PATH]` `[--output PATH]` `[--script/-s SCRIPT]` `[--test NAME]` `[--verbose/-v]` | Parse regression results, reconstruct configs, interact with sig_pcie workspace config, and write QA report | [`IMPLEMENTATION/analyse.md`](./IMPLEMENTATION/analyse.md) |
@@ -163,6 +165,10 @@ qa-agent guide summarise                   # Guide for summarise command
 qa-agent guide doctor                      # Guide for doctor command
 qa-agent doctor                            # Check environment health
 qa-agent doctor --verbose                  # Show raw values/paths
+qa-agent init                              # Auto-detect project root and create config
+qa-agent init /path/to/my_project          # Explicit root for config creation
+qa-agent init --use_defaults               # Skip wizard and auto-detect paths using defaults
+qa-agent config                            # Open configuration for manual editing
 qa-agent summarise                         # Summarise current dir (pwd) — Claude by default
 qa-agent summarise .                       # Same, explicit
 qa-agent summarise src/                    # Summarise a directory
