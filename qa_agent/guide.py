@@ -108,17 +108,44 @@ _DOCTOR_BODY = """\
   See also:  qa-agent guide   (overview of all commands)
 """
 
+_REPORT_BODY = """\
+  What it does:
+    • Generates a structured debug report from Questa/Visualizer simulation output
+    • Uses an AI agent (acting as a DV expert) to investigate the failure
+    • The AI makes targeted tool calls to extract logs, assertions, scoreboard, and signals
+    • Writes a final Markdown report summarizing the root cause, evidence, and next steps
+
+  When to use:
+    • You have a failing simulation directory (e.g., from `qa-agent analyse` debug run)
+    • You want an AI-generated explanation of the failure without reading logs manually
+
+  Quick examples:
+    $ qa-agent report /path/to/sim/dir         # Standard run
+    $ qa-agent report . -p openai              # Use OpenAI instead of Claude
+    $ qa-agent report . --verbose              # See every tool call the AI makes
+
+  Flags:
+    --provider, -p {claude,openai,gemini}   AI provider (default: claude)
+    --output, -o PATH                       Custom report path
+    --max-turns N                           Max investigation turns (default: 15)
+    --verbose, -v                           Print detailed progress and tool calls
+
+  See also:  qa-agent analyse   (generates the debug directories this command reads)
+"""
+
 _OVERVIEW_BODY = """\
   qa-agent automates the mechanical work in a DV regression workflow:
 
     1. Run a regression      →  qa-agent regression
     2. Triage the failures   →  qa-agent analyse
-    3. AI code summaries     →  qa-agent summarise   (Claude / OpenAI / Gemini)
+    3. Generate debug report →  qa-agent report      (Claude / OpenAI / Gemini)
+    4. AI code summaries     →  qa-agent summarise   (Claude / OpenAI / Gemini)
 
   Commands:
 
     regression   Source env, run regression (basic or slurm), capture log
     analyse      Parse results file, re-run failed tests, generate QA report
+    report       Generate an AI-driven debug report from simulation output
     summarise    Summarise files / directories using an AI provider
     doctor       Check environment: SDKs, API keys, Python version
     hello        Welcome screen and quick start
@@ -155,6 +182,11 @@ GUIDES: dict[str, tuple[str, str, str]] = {
         "qa-agent doctor",
         "Check that your environment is correctly set up",
         _DOCTOR_BODY,
+    ),
+    "report": (
+        "qa-agent report",
+        "Generate an AI-driven debug report from sim output",
+        _REPORT_BODY,
     ),
 }
 

@@ -25,7 +25,7 @@ High-level overview. For per-command implementation detail, see [`IMPLEMENTATION
 1. **Regression** (`qa-agent regression`) — sources the shell environment, locates filelist/config files, runs basic or Slurm regressions with live output, and captures a timestamped log.
 2. **Triage** (`qa-agent analyse`) — parses results files, reconstructs configs + seeds for every failure, re-runs debug scripts in isolated subdirs, and writes a grouped Markdown QA report.
 3. **AI summarisation** (`qa-agent summarise`) — sends source files to Claude, OpenAI, or Gemini for structured explanation. *Available now.*
-4. **AI-driven triage** — automated root-cause correlation and natural-language report generation. *On the roadmap.*
+4. **AI-driven triage** (`qa-agent report`) — automated root-cause correlation and natural-language report generation using agentic tool-calling. *Available now.*
 
 For 10+ failures this turns hours of mechanical work into a single command.
 
@@ -58,10 +58,18 @@ marquee-agents/
 │   ├── guide.py                 # Short per-command user guides + overview renderer
 │   ├── summarise.py             # Orchestrator: prompt building, output formatting, provider routing
 │   ├── analyse.py               # Regression results parser + Markdown QA report writer
+│   ├── report.py                # AI-driven debug report orchestrator
 │   ├── doctor.py                # Environment health checker: SDKs, auth, log dir
 │   ├── regression.py            # Regression run lifecycle: source env, locate files, run, verify
-│   ├── claude_provider.py       # Claude Agent SDK provider (generic; reusable across commands)
-│   ├── openai_provider.py       # OpenAI Chat Completions provider
+│   ├── claude_provider.py       # Claude SDK provider (stream + chat_with_tools)
+│   ├── openai_provider.py       # OpenAI completions provider (stream + chat_with_tools)
+│   ├── gemini_provider.py       # Google Gemini provider (stream + chat_with_tools)
+│   ├── agents/                  # AI agent personas and strategies
+│   │   └── dv_debug_agent.py   # Expert DV engineer prompt + loop initialization
+│   └── tools/                   # Agentic tool infrastructure
+│       ├── registry.py          # ToolDef, ToolResult, ToolRegistry (security boundary)
+│       ├── loop.py              # Provider-agnostic tool dispatch loop
+│       └── report/              # Handlers for the report command (read-only, sanitized)
 │   └── gemini_provider.py       # Google Gemini provider
 ├── scripts/                     # Bundled default regression/debug files
 │   ├── run_apci_2025.pl             # Default debug Perl script
@@ -89,6 +97,7 @@ marquee-agents/
 | `init` | `[root]` `[--force/-f]` `[--use_defaults]` | Interactive wizard: discover project files and write qa-agent.yaml | [`IMPLEMENTATION/init_and_config.md`](./IMPLEMENTATION/init_and_config.md) |
 | `config` | — | Open qa-agent.yaml in your editor ($EDITOR, default: vim) | [`IMPLEMENTATION/init_and_config.md`](./IMPLEMENTATION/init_and_config.md) |
 | `summarise` | `[PATH …]` `--provider`/`-p {claude,openai,gemini}` | Summarise files or directories using AI | [`IMPLEMENTATION/summarise.md`](./IMPLEMENTATION/summarise.md) |
+| `report` | `SIM_DIR` `--provider`/`-p` `--output` `--gvim` | Generate an AI-driven debug report from sim output | [`IMPLEMENTATION/report.md`](./IMPLEMENTATION/report.md) |
 | `doctor` | `--verbose`/`-v` | Check SDKs, auth, and log system | [`IMPLEMENTATION/doctor.md`](./IMPLEMENTATION/doctor.md) |
 | `analyse` | `[--mode basic\|slurm]` `[--working-dir PATH]` `[--output PATH]` `[--script/-s SCRIPT]` `[--test NAME]` `[--verbose/-v]` | Parse regression results, reconstruct configs, interact with sig_pcie workspace config, and write QA report | [`IMPLEMENTATION/analyse.md`](./IMPLEMENTATION/analyse.md) |
 | `regression` | `[source]` `[--slurm]` `[--verbose/-v]` | Check for sig_pcie source directory, locate scripts/filelist, source csh, execute regression, stream log | [`IMPLEMENTATION/regression.md`](./IMPLEMENTATION/regression.md) |
@@ -178,6 +187,10 @@ qa-agent summarise -p openai               # Use OpenAI (GPT-4o)
 qa-agent summarise -p gemini               # Use Google Gemini
 qa-agent --verbose summarise .             # Verbose output + full tracebacks
 qa-agent --debug summarise .              # Debug mode: verbose + session log written
+qa-agent report /path/to/sim/dir           # Generate an AI-driven debug report
+qa-agent report . -p openai                # Use OpenAI instead of Claude
+qa-agent report . --verbose                # Print all tool calls as the AI investigates (prompts for confirmation)
+qa-agent report . --gvim                   # Open AI payload in gvim step by step
 qa-agent --version                         # Print version
 qa-agent --help                            # All commands
 qa-agent summarise --help                  # Sub-command help

@@ -112,3 +112,83 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
             # avoids the anyio-cancel-scope task-affinity error that occurs when
             # GeneratorExit is thrown into the generator mid-scope.
             pass
+
+
+async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[name-defined]  # noqa: F821
+    """Send one turn of the agentic conversation to Claude via the Messages API.
+
+    Uses the Anthropic Messages API directly (NOT claude-agent-sdk) so that
+    tool calls are intercepted locally rather than executed by Claude's runtime.
+    This is the security boundary: our tool handlers run, not Claude's.
+
+    Args:
+        request: ToolCallRequest with messages, tools registry, model, max_tokens.
+
+    Returns:
+        dict with keys:
+            role      → "assistant"
+            content   → str | None  (text response on the final turn)
+            tool_calls → list[dict] | None  (tool call requests on intermediate turns)
+                         Each dict: {id, name, arguments (dict)}
+    """
+    try:
+        import anthropic  # type: ignore
+    except ImportError as exc:
+        raise ProviderAuthError(
+            "anthropic SDK is not installed.\n"
+            "  Run:  pip install anthropic"
+        ) from exc
+
+    from qa_agent.providers import ToolCallRequest  # local import to avoid circular
+
+    env_override = _resolve_auth()
+    api_key = env_override.get("ANTHROPIC_API_KEY", "")
+
+    client_kwargs: dict = {}
+    if api_key:
+        client_kwargs["api_key"] = api_key
+
+    client = anthropic.Anthropic(**client_kwargs)
+
+    model = request.model or "claude-opus-4-5"
+
+    # Build the tool schemas in Anthropic format
+    tools_schema = request.tools.to_claude_schema()
+
+    # Separate the system message from the conversation history
+    system_msg = ""
+    messages = []
+    for msg in request.messages:
+        if msg.get("role") == "system":
+            system_msg = msg.get("content", "")
+        else:
+            messages.append(msg)
+
+    response = client.messages.create(
+        model=model,
+        max_tokens=request.max_tokens,
+        system=system_msg,
+        messages=messages,
+        tools=tools_schema,
+        tool_choice={"type": "auto"},
+    )
+
+    # Parse response into our normalised format
+    text_parts = []
+    tool_calls = []
+    for block in response.content:
+        if block.type == "text":
+            text_parts.append(block.text)
+        elif block.type == "tool_use":
+            tool_calls.append({
+                "id": block.id,
+                "name": block.name,
+                "arguments": block.input,
+            })
+
+    return {
+        "role": "assistant",
+        "content": "\n".join(text_parts) if text_parts else None,
+        "tool_calls": tool_calls if tool_calls else None,
+    }
+

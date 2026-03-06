@@ -43,3 +43,24 @@ class ProviderRequest:
     allowed_tools: list[str] = field(default_factory=list)
     max_turns: int = 10
     extra: dict = field(default_factory=dict)
+
+
+@dataclass
+class ToolCallRequest:
+    """Request type for agentic tool-calling loops.
+
+    Unlike ProviderRequest (which is for simple streaming), ToolCallRequest
+    carries the full message history and the available tool schemas so that
+    each provider can implement multi-turn tool-calling via its native API.
+
+    Attributes:
+        messages:    Full conversation history as a list of role/content dicts.
+        tools:       ToolRegistry providing schema conversion per provider.
+        model:       Optional model override (provider-specific string).
+        max_tokens:  Maximum tokens for each individual completion call.
+    """
+
+    messages: list[dict]
+    tools: object   # ToolRegistry — typed as object to avoid circular import
+    model: str = ""
+    max_tokens: int = 4096

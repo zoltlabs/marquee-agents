@@ -62,9 +62,10 @@ For a regression with **10+ failures**, this takes **hours** — and most of it 
 - **Discovers** project paths, regression scripts, and debug tools automatically
 - **Manages** a central `qa-agent.yaml` file so the tool works seamlessly across projects
 
-### AI-Driven Triage — roadmap
-- Automated root-cause correlation across multiple failures
-- Natural-language triage report generation
+### AI-Driven Triage (`qa-agent report`) — available now
+- **Investigates** failures using an agentic loop acting as a DV expert
+- **Extracts** targeted evidence (compilation errors, SVA assertions, scoreboard mismatches)
+- **Generates** a natural-language Markdown report with root cause and actionable next steps
 
 DV engineers can focus on the failures themselves rather than the process of finding them.
 
@@ -194,6 +195,7 @@ qa-agent <command> [options]
 | `config` | Open `qa-agent.yaml` in your editor for manual editing |
 | `doctor` | Check that all SDKs and credentials are correctly configured |
 | `summarise [PATH …]` | Summarise files or directories using AI |
+| `report` | Generate an AI-driven debug report from simulation output |
 | `analyse` | Parse a regression results file, run debug commands per failure, and write a grouped Markdown QA report |
 | `regression` | Source environment, locate inputs, execute regression (basic or slurm), stream output, capture log, verify results |
 
@@ -256,6 +258,41 @@ Opens the project's `qa-agent.yaml` configuration file in your preferred editor 
 ```bash
 qa-agent config
 ```
+
+---
+
+### `qa-agent report`
+
+Generate an AI-driven debug report from a failing simulation directory. The AI agent acts as an expert DV engineer, requesting targeted data (logs, assertions, tracker events) safely using tools to determine the root cause without reading gigabytes of text.
+
+```bash
+# Generate a report from a target directory
+qa-agent report /path/to/sim/dir
+
+# Use OpenAI GPT-4o instead of Claude
+qa-agent report . -p openai
+
+# Print every tool call the AI makes as it investigates
+qa-agent report . --verbose
+
+# Open the prompt and data being sent to the AI in gvim step by step
+qa-agent report . --gvim
+
+# Save to a specific file
+qa-agent report . -o root_cause.md
+```
+
+> **Note**: For security, all agentic tool executions will pause and ask for your permission `[p/s]` before running.
+
+#### Flags
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--provider` | `-p` | `claude` | AI provider (`claude`, `openai`, `gemini`) |
+| `--output` | `-o` | *(auto)* | Output Markdown path (default: `debug_report_<timestamp>.md`) |
+| `--max-turns` | — | `15` | Maximum agentic investigation turns |
+| `--verbose` | `-v` | off | Show detailed progress and all tool calls/results |
+| `--gvim` | — | off | Open prompt and data being sent to the AI in gvim step by step |
 
 ---
 

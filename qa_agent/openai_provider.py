@@ -154,3 +154,64 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta and delta.content:
             yield delta.content
+
+
+async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[name-defined]  # noqa: F821
+    """Send one turn of the agentic conversation to OpenAI with tool-calling.
+
+    Args:
+        request: ToolCallRequest with messages, tools registry, model, max_tokens.
+
+    Returns:
+        Normalised dict: {role, content, tool_calls}
+        tool_calls entries: {id, name, arguments (dict)}
+    """
+    try:
+        from openai import AsyncOpenAI  # type: ignore
+    except ImportError as exc:
+        raise ProviderAuthError(
+            "OpenAI SDK is not installed.\n"
+            "  Run:  pip install openai"
+        ) from exc
+
+    api_key = _resolve_auth()
+    model = request.model or _DEFAULT_MODEL
+
+    client = AsyncOpenAI(api_key=api_key)
+
+    tools_schema = request.tools.to_openai_schema()
+
+    response = await client.chat.completions.create(
+        model=model,
+        messages=request.messages,  # type: ignore[arg-type]
+        tools=tools_schema,  # type: ignore[arg-type]
+        tool_choice="auto",
+        max_completion_tokens=request.max_tokens,
+    )
+
+    choice = response.choices[0]
+    message = choice.message
+
+    text = message.content  # str | None
+
+    tool_calls = None
+    if message.tool_calls:
+        tool_calls = []
+        for tc in message.tool_calls:
+            import json
+            try:
+                args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+            except Exception:
+                args = {}
+            tool_calls.append({
+                "id": tc.id,
+                "name": tc.function.name,
+                "arguments": args,
+            })
+
+    return {
+        "role": "assistant",
+        "content": text,
+        "tool_calls": tool_calls,
+    }
+

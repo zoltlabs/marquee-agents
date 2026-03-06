@@ -162,3 +162,121 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
     for chunk in chunks:
         if chunk.text:
             yield chunk.text
+
+
+async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[name-defined]  # noqa: F821
+    """Send one turn of the agentic conversation to Gemini with function calling.
+
+    Args:
+        request: ToolCallRequest with messages, tools registry, model, max_tokens.
+
+    Returns:
+        Normalised dict: {role, content, tool_calls}
+        tool_calls entries: {id, name, arguments (dict)}
+    """
+    try:
+        from google import genai  # type: ignore
+        from google.genai import types as genai_types  # type: ignore
+    except ImportError as exc:
+        raise ProviderAuthError(
+            "Google Gen AI SDK is not installed.\n"
+            "  Run:  pip install google-genai"
+        ) from exc
+
+    client_kwargs = _resolve_auth()
+    model = request.model or _DEFAULT_MODEL
+    client = genai.Client(**client_kwargs)
+
+    # Build function declarations for Gemini
+    function_decls = []
+    for spec in request.tools.to_gemini_schema():
+        function_decls.append(
+            genai_types.FunctionDeclaration(
+                name=spec["name"],
+                description=spec["description"],
+                parameters=spec["parameters"],
+            )
+        )
+
+    gemini_tools = [genai_types.Tool(function_declarations=function_decls)]
+
+    # Convert messages to Gemini Content format
+    # Gemini uses "user" / "model" roles (not "assistant")
+    gemini_contents = []
+    system_text = ""
+    for msg in request.messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "system":
+            system_text = content
+            continue
+        if role == "assistant":
+            role = "model"
+        if isinstance(content, str):
+            gemini_contents.append(
+                genai_types.Content(role=role, parts=[genai_types.Part(text=content)])
+            )
+        elif isinstance(content, list):
+            # Tool result messages — content is list of {type, tool_use_id, content}
+            parts = []
+            for item in content:
+                if item.get("type") == "tool_result":
+                    parts.append(genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name=item.get("name", ""),
+                            response={"result": item.get("content", "")},
+                        )
+                    ))
+            if parts:
+                gemini_contents.append(genai_types.Content(role="user", parts=parts))
+
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_text or None,
+        tools=gemini_tools,
+        max_output_tokens=request.max_tokens,
+        tool_config=genai_types.ToolConfig(
+            function_calling_config=genai_types.FunctionCallingConfig(mode="AUTO")
+        ),
+    )
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _call():
+        return client.models.generate_content(
+            model=model,
+            contents=gemini_contents or [genai_types.Content(role="user", parts=[
+                genai_types.Part(text="Begin investigation.")
+            ])],
+            config=config,
+        )
+
+    response = await loop.run_in_executor(None, _call)
+
+    # Parse Gemini response
+    text_parts = []
+    tool_calls = []
+
+    try:
+        candidate = response.candidates[0]
+        for part in candidate.content.parts:
+            if hasattr(part, "text") and part.text:
+                text_parts.append(part.text)
+            elif hasattr(part, "function_call") and part.function_call:
+                fc = part.function_call
+                args = dict(fc.args) if fc.args else {}
+                # Gemini doesn't give tool_call_ids — generate a simple one
+                tool_calls.append({
+                    "id": f"gemini_{fc.name}_{len(tool_calls)}",
+                    "name": fc.name,
+                    "arguments": args,
+                })
+    except (IndexError, AttributeError):
+        pass
+
+    return {
+        "role": "assistant",
+        "content": "\n".join(text_parts) if text_parts else None,
+        "tool_calls": tool_calls if tool_calls else None,
+    }
+

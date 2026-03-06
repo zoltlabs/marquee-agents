@@ -145,6 +145,57 @@ def main() -> None:
         help="Print the generated debug commands for each failure and exit (no runs, no report).",
     )
 
+    # ── report ────────────────────────────────────────────────────────────────
+    report_parser = subparsers.add_parser(
+        "report",
+        help="AI-Driven Debug Report from Simulation Output.",
+        description=(
+            "Generate a structured debug report from Questa/Visualizer simulation output.\n"
+            "The AI investigates failures by requesting targeted data safely.\n\n"
+            "  qa-agent report /path/to/simulation/dir\n"
+            "  qa-agent report . -p openai\n"
+            "  qa-agent report . -o debug_report.md\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    report_parser.add_argument(
+        "sim_dir",
+        metavar="SIM_DIR",
+        help="Simulation output directory (contains qrun.out/, logs/, etc.)",
+    )
+    report_parser.add_argument(
+        "--provider", "-p",
+        choices=["claude", "openai", "gemini"],
+        default="claude",
+        metavar="PROVIDER",
+        help="AI provider to use: claude (default), openai, gemini.",
+    )
+    report_parser.add_argument(
+        "--output", "-o",
+        default=None,
+        metavar="PATH",
+        help="Path for the output report (default: debug_report_<timestamp>.md).",
+    )
+    report_parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=15,
+        metavar="N",
+        help="Max AI investigation turns (default: 15).",
+    )
+    report_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=False,
+        help="Show detailed progress, tool calls, and raw AI reasoning.",
+    )
+    report_parser.add_argument(
+        "--gvim",
+        action="store_true",
+        default=False,
+        help="Open prompt and data being sent to the AI in gvim step by step.",
+    )
+    
     # ── regression ────────────────────────────────────────────────────────────
     regression_parser = subparsers.add_parser(
         "regression",
@@ -284,6 +335,19 @@ def main() -> None:
         elif args.command == "doctor":
             from qa_agent.doctor import run as doctor_run
             doctor_run(verbose=args.verbose)
+
+        elif args.command == "report":
+            from qa_agent.report import run as do_report
+            do_report(
+                sim_dir=args.sim_dir,
+                provider=args.provider,
+                output=args.output,
+                max_turns=args.max_turns,
+                verbose=args.verbose,
+                debug=args.debug,
+                gvim=args.gvim,
+                log=log,
+            )
 
         elif args.command == "analyse":
             if not _require_config():

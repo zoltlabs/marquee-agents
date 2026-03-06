@@ -41,6 +41,10 @@ class ConfigError(QAAgentError):
     """Invalid or missing configuration."""
 
 
+class ToolExecutionError(QAAgentError):
+    """A tool handler raised an exception during the agentic loop."""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Central handler
 # ─────────────────────────────────────────────────────────────────────────────
