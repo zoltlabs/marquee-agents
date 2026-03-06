@@ -282,7 +282,7 @@ qa-agent report . --gvim
 qa-agent report . -o root_cause.md
 ```
 
-> **Note**: For security, all agentic tool executions will pause and ask for your permission `[p/s]` before running.
+> **Note**: For security, all agentic tool executions will pause and ask for your permission through an interactive prompt before running.
 
 #### Flags
 

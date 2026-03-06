@@ -60,7 +60,7 @@ def run(
         out_path = Path(f"debug_report_{ts}.md")
 
     if log:
-        log.info(action="report_start", sim_dir=str(sim_path), provider=provider)
+        log.event("report start", sim_dir=str(sim_path), provider=provider)
 
     # 3. Build tool registry
     from qa_agent.tools.report import build_report_tools
@@ -104,7 +104,7 @@ def run(
         print()
         print(f"  {bold('Report saved to:')} {cyan(str(out_path))}")
         if log:
-            log.info(action="report_complete", path=str(out_path), bytes=len(report_text))
+            log.event("report complete", path=str(out_path), bytes=len(report_text))
     except OSError as exc:
         print(f"{red('FAILED')}")
         print_rich_error(f"Could not write report to {out_path}: {exc}")

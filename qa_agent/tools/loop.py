@@ -182,6 +182,20 @@ async def run_tool_loop(
             except Exception as e:
                 print(f"Warning: Failed to open gvim: {e}")
 
+            from qa_agent.output import bold, arrow_select
+            import sys
+            try:
+                ans = arrow_select(
+                    f"{bold('?')} Review complete. Send the payload to the AI? Proceed?",
+                    [("Proceed", "send payload to AI"), ("Stop", "abort and exit")]
+                )
+                if ans != 0:
+                    print("  AI request stopped by user. Exiting.")
+                    sys.exit(0)
+            except KeyboardInterrupt:
+                print("\n  AI request stopped by user. Exiting.")
+                sys.exit(0)
+
         response = await provider_mod.chat_with_tools(request)
 
         ai_content: str | None = response.get("content")
@@ -216,20 +230,19 @@ async def run_tool_loop(
                     on_tool_call(tc_name, tc_args)
 
             # Interactive tool execution user prompt
-            from qa_agent.output import cyan, bold
-            import builtins
+            from qa_agent.output import cyan, bold, arrow_select
             import sys
-            while True:
-                try:
-                    ans = builtins.input(f"  {bold('?')} AI requested {cyan(tc_name)}. Proceed? [p/s]: ").strip().lower()
-                    if ans in ("p", "proceed", "y", "yes", ""):
-                        break
-                    elif ans in ("s", "stop", "n", "no"):
-                        print(f"\n  Tool execution stopped by user. Exiting.")
-                        sys.exit(0)
-                except KeyboardInterrupt:
-                    print(f"\n  Tool execution stopped by user. Exiting.")
+            try:
+                ans = arrow_select(
+                    f"{bold('?')} AI requested tool {cyan(tc_name)}. Proceed?",
+                    [("Proceed", "allow execution"), ("Stop", "abort and exit")]
+                )
+                if ans != 0:
+                    print(f"  Tool execution stopped by user. Exiting.")
                     sys.exit(0)
+            except KeyboardInterrupt:
+                print(f"\n  Tool execution stopped by user. Exiting.")
+                sys.exit(0)
 
             result = tools.execute(tc_id, tc_name, tc_args)
 
