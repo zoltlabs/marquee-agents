@@ -67,6 +67,8 @@ For a regression with **10+ failures**, this takes **hours** — and most of it 
 - **Extracts** targeted evidence (compilation errors, SVA assertions, scoreboard mismatches)
 - **Generates** a natural-language Markdown report with root cause and actionable next steps
 
+> **Security Note:** No AI providers (Claude, Gemini, or OpenAI) are granted direct access to files or directories in the repository. They interact with data strictly through explicitly allowed tool definitions. Additionally, all providers forcefully execute within a securely jailed empty `/tmp/.qa-agent` sandbox—making it inherently impossible for the AI to arbitrarily explore the true project working directory.
+
 DV engineers can focus on the failures themselves rather than the process of finding them.
 
 ---

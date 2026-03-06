@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from typing import AsyncIterator
 
 from qa_agent.errors import ProviderAuthError
@@ -102,6 +103,13 @@ def _resolve_auth() -> dict:
     )
 
 
+def _get_sandbox_dir() -> str:
+    """Return the absolute path to the secure empty sandbox directory."""
+    sandbox = os.path.join(tempfile.gettempdir(), ".qa-agent")
+    os.makedirs(sandbox, exist_ok=True)
+    return sandbox
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -145,11 +153,16 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
     loop = asyncio.get_event_loop()
 
     def _run_stream():
-        return list(client.models.generate_content_stream(
-            model=model,
-            contents=request.user_prompt,
-            config=config,
-        ))
+        original_cwd = os.getcwd()
+        os.chdir(_get_sandbox_dir())
+        try:
+            return list(client.models.generate_content_stream(
+                model=model,
+                contents=request.user_prompt,
+                config=config,
+            ))
+        finally:
+            os.chdir(original_cwd)
 
     chunks = await loop.run_in_executor(None, _run_stream)
 
@@ -237,13 +250,18 @@ async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[n
     loop = asyncio.get_event_loop()
 
     def _call():
-        return client.models.generate_content(
-            model=model,
-            contents=gemini_contents or [genai_types.Content(role="user", parts=[
-                genai_types.Part(text="Begin investigation.")
-            ])],
-            config=config,
-        )
+        original_cwd = os.getcwd()
+        os.chdir(_get_sandbox_dir())
+        try:
+            return client.models.generate_content(
+                model=model,
+                contents=gemini_contents or [genai_types.Content(role="user", parts=[
+                    genai_types.Part(text="Begin investigation.")
+                ])],
+                config=config,
+            )
+        finally:
+            os.chdir(original_cwd)
 
     response = await loop.run_in_executor(None, _call)
 

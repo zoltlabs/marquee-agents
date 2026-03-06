@@ -27,7 +27,7 @@ High-level overview. For per-command implementation detail, see [`IMPLEMENTATION
 3. **AI summarisation** (`qa-agent summarise`) — explicitly embeds source files provided into prompts for Claude, OpenAI, or Gemini for structured explanation (AI has no direct open file/folder access). *Available now.*
 4. **AI-driven triage** (`qa-agent report`) — automated root-cause correlation and natural-language report generation using strictly sandboxed tool-calling (AI has no direct open file/folder access). *Available now.*
 
-> **Security Note:** No providers (Claude, Gemini, or Codex/OpenAI) are granted direct access to folders or files in the repository. The AI only interacts with data via explicitly allowed tool calls or manually provided file content, ensuring the AI won't have context of anything else in the repo.
+> **Security Note:** No providers (Claude, Gemini, or Codex/OpenAI) are granted direct access to folders or files in the repository. The AI only interacts with data via explicitly allowed tool calls or manually provided file content. Additionally, every provider executes within a securely jailed empty `/tmp/.qa-agent` sandbox to ensure the AI inherently has zero mechanism to arbitrarily explore the true project working directory.
 
 For 10+ failures this turns hours of mechanical work into a single command.
 

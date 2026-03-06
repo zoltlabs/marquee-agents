@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from typing import AsyncIterator
 
 from qa_agent.errors import ProviderAuthError, ProviderConnectionError, ProviderResponseError
@@ -71,6 +72,12 @@ def _resolve_auth() -> dict[str, str]:
         "    claude login"
     )
 
+def _get_sandbox_dir() -> str:
+    """Return the absolute path to the secure empty sandbox directory."""
+    sandbox = os.path.join(tempfile.gettempdir(), ".qa-agent")
+    os.makedirs(sandbox, exist_ok=True)
+    return sandbox
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider entry point
@@ -93,12 +100,14 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
     )
 
     env_override = _resolve_auth()
+    sandbox_dir = _get_sandbox_dir()
 
     options = ClaudeAgentOptions(
         allowed_tools=request.allowed_tools,
         system_prompt=request.system_prompt,
         env=env_override,
         max_turns=request.max_turns,
+        cwd=sandbox_dir,  # FORCED SANDBOX: prevents SDK built-in tools from seeing project files
     )
 
     async for message in query(prompt=request.user_prompt, options=options):
@@ -107,9 +116,6 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
                 if hasattr(block, "text") and block.text:
                     yield block.text
         elif isinstance(message, ResultMessage):
-            # Do not `return` here — letting the SDK iterator exhaust naturally
-            # avoids the anyio-cancel-scope task-affinity error that occurs when
-            # GeneratorExit is thrown into the generator mid-scope.
             pass
 
 
@@ -140,54 +146,52 @@ async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[n
 
     from qa_agent.providers import ToolCallRequest  # local import to avoid circular
 
-    env_override = _resolve_auth()
-    api_key = env_override.get("ANTHROPIC_API_KEY", "")
+    api_key = _resolve_auth()
 
-    client_kwargs: dict = {}
-    if api_key:
-        client_kwargs["api_key"] = api_key
+    # Change current working directory of Python process as a secondary fail-safe sandbox.
+    # Because tools use absolute paths, chdir does not break them!
+    sandbox_dir = _get_sandbox_dir()
+    original_cwd = os.getcwd()
+    os.chdir(sandbox_dir)
 
-    client = anthropic.Anthropic(**client_kwargs)
+    try:
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        model = request.model or "claude-3-5-sonnet-20241022"
+        tools_schema = request.tools.to_claude_schema()
 
-    model = request.model or "claude-opus-4-5"
+        system_msg = ""
+        messages = []
+        for msg in request.messages:
+            if msg.get("role") == "system":
+                system_msg = msg.get("content", "")
+            else:
+                messages.append(msg)
 
-    # Build the tool schemas in Anthropic format
-    tools_schema = request.tools.to_claude_schema()
+        response = await client.messages.create(
+            model=model,
+            max_tokens=request.max_tokens,
+            system=system_msg,
+            messages=messages,
+            tools=tools_schema,
+            tool_choice={"type": "auto"},
+        )
 
-    # Separate the system message from the conversation history
-    system_msg = ""
-    messages = []
-    for msg in request.messages:
-        if msg.get("role") == "system":
-            system_msg = msg.get("content", "")
-        else:
-            messages.append(msg)
+        text_parts = []
+        tool_calls = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append({
+                    "id": block.id,
+                    "name": block.name,
+                    "arguments": block.input,
+                })
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=request.max_tokens,
-        system=system_msg,
-        messages=messages,
-        tools=tools_schema,
-        tool_choice={"type": "auto"},
-    )
-
-    # Parse response into our normalised format
-    text_parts = []
-    tool_calls = []
-    for block in response.content:
-        if block.type == "text":
-            text_parts.append(block.text)
-        elif block.type == "tool_use":
-            tool_calls.append({
-                "id": block.id,
-                "name": block.name,
-                "arguments": block.input,
-            })
-
-    return {
-        "role": "assistant",
-        "content": "\n".join(text_parts) if text_parts else None,
-        "tool_calls": tool_calls if tool_calls else None,
-    }
-
+        return {
+            "role": "assistant",
+            "content": "\n".join(text_parts) if text_parts else None,
+            "tool_calls": tool_calls if tool_calls else None,
+        }
+    finally:
+        os.chdir(original_cwd)

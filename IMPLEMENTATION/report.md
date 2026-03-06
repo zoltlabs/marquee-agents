@@ -83,7 +83,7 @@ qa_agent/
 
 ## Security Model
 
-The AI agent operates in a **sandboxed data environment**. It has zero direct filesystem access. Every piece of data it receives passes through a tool handler that enforces:
+The AI agent operates in a **sandboxed data environment**. It has zero direct filesystem access. Additionally, the execution layer of the agent itself (`claude_provider.py`, `openai_provider.py`, `gemini_provider.py`) is forcefully jailed to an empty generated `/tmp/.qa-agent` workspace while executing. Every piece of data it receives passes through a tool handler that enforces:
 
 ### Path Containment (`tools/report/security.py`)
 - All requested paths are resolved and validated to be **within** `sim_dir`

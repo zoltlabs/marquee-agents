@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from typing import AsyncIterator
 
 from qa_agent.errors import ProviderAuthError, ProviderConnectionError
@@ -84,17 +85,21 @@ def _resolve_auth() -> str:
                 key = data.get("apiKey", "").strip()
                 if key:
                     return key
-            except (json.JSONDecodeError, OSError):
-                pass
+    if not api_key:
+        raise ProviderAuthError(
+            "Authentication failed.\n\n"
+            "  Codex CLI OAuth is not supported for `report`.\n"
+            "  Please explicitly set your API key:\n"
+            "    export OPENAI_API_KEY=sk-...\n"
+        )
+    return api_key
 
-    raise ProviderAuthError(
-        "Authentication failed.\n\n"
-        "  Option 1 — API key:\n"
-        "    export OPENAI_API_KEY=sk-...\n\n"
-        "  Option 2 — Codex CLI OAuth:\n"
-        "    npm install -g @openai/codex\n"
-        "    codex login"
-    )
+
+def _get_sandbox_dir() -> str:
+    """Return the absolute path to the secure empty sandbox directory."""
+    sandbox = os.path.join(tempfile.gettempdir(), ".qa-agent")
+    os.makedirs(sandbox, exist_ok=True)
+    return sandbox
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,20 +138,28 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
 
     client = AsyncOpenAI(api_key=api_key)
 
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": request.system_prompt},
-            {"role": "user",   "content": request.user_prompt},
-        ],
-        stream=True,
-        max_completion_tokens=request.extra.get("max_tokens", 4096),
-    )
+    original_cwd = os.getcwd()
+    os.chdir(_get_sandbox_dir())
 
-    async for chunk in response:
-        delta = chunk.choices[0].delta if chunk.choices else None
-        if delta and delta.content:
-            yield delta.content
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": request.system_prompt},
+                {"role": "user",   "content": request.user_prompt},
+            ],
+            stream=True,
+            max_completion_tokens=request.extra.get("max_tokens", 4096),
+        )
+
+        async for chunk in response:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+    finally:
+        os.chdir(original_cwd)
+
+
 
 
 async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[name-defined]  # noqa: F821
@@ -171,16 +184,21 @@ async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[n
     model = request.model or _DEFAULT_MODEL
 
     client = AsyncOpenAI(api_key=api_key)
-
     tools_schema = request.tools.to_openai_schema()
 
-    response = await client.chat.completions.create(
-        model=model,
-        messages=request.messages,  # type: ignore[arg-type]
-        tools=tools_schema,  # type: ignore[arg-type]
-        tool_choice="auto",
-        max_completion_tokens=request.max_tokens,
-    )
+    original_cwd = os.getcwd()
+    os.chdir(_get_sandbox_dir())
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=request.messages,  # type: ignore[arg-type]
+            tools=tools_schema,  # type: ignore[arg-type]
+            tool_choice="auto",
+            max_completion_tokens=request.max_tokens,
+        )
+    finally:
+        os.chdir(original_cwd)
 
     choice = response.choices[0]
     message = choice.message

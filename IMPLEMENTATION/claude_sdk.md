@@ -59,7 +59,7 @@ If `claude` is on `$PATH` and no API key is set, the CLI's stored OAuth session 
 ClaudeAgentOptions(
     allowed_tools=request.allowed_tools,   # from ProviderRequest
     system_prompt=request.system_prompt,   # from ProviderRequest
-    cwd=request.agent_cwd,                 # from ProviderRequest
+    cwd=sandbox_dir,                       # securely isolated /tmp/.qa-agent sandbox
     env=env_override,                      # {} or {"ANTHROPIC_API_KEY": "..."}
     max_turns=request.max_turns,           # default 10
 )
