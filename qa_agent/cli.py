@@ -1,6 +1,7 @@
 import argparse
 import importlib.metadata
 import sys
+from pathlib import Path
 
 from qa_agent.session_log import SessionLog
 
@@ -137,6 +138,12 @@ def main() -> None:
         default=False,
         help="Print detailed progress to stdout (debug dirs, command text, etc.).",
     )
+    analyse_parser.add_argument(
+        "--cmd",
+        action="store_true",
+        default=False,
+        help="Print the generated debug commands for each failure and exit (no runs, no report).",
+    )
 
     # ── regression ────────────────────────────────────────────────────────────
     regression_parser = subparsers.add_parser(
@@ -170,6 +177,48 @@ def main() -> None:
         help="Print detailed progress (resolved paths, full commands).",
     )
 
+    # ── init ──────────────────────────────────────────────────────────────────
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Interactive wizard: discover project files and write qa-agent.yaml.",
+        description=(
+            "Scans your project tree and guides you through selecting the right\n"
+            "source file, regression scripts, debug script, and output names.\n"
+            "Writes qa-agent.yaml to the project root.\n\n"
+            "  qa-agent init                        # auto-detect project root\n"
+            "  qa-agent init /path/to/my_project    # explicit root\n"
+            "  qa-agent init --force                # overwrite existing config\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    init_parser.add_argument(
+        "root",
+        nargs="?",
+        default=None,
+        metavar="ROOT",
+        help="Project root directory (default: auto-detect via RTL/ directory heuristic).",
+    )
+    init_parser.add_argument(
+        "--force", "-f",
+        action="store_true",
+        default=False,
+        help="Overwrite existing qa-agent.yaml without prompting.",
+    )
+    init_parser.add_argument(
+        "--use_defaults",
+        action="store_true",
+        default=False,
+        help="Skip interactive wizard; auto-detect paths and use all default values.",
+    )
+
+    # ── config ────────────────────────────────────────────────────────────────
+    subparsers.add_parser(
+        "config",
+        help="Open qa-agent.yaml in your editor ($EDITOR, default: vim).",
+        description="Opens the project qa-agent.yaml config file for manual editing.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
     # ── guide ─────────────────────────────────────────────────────────────────
     sp_guide = subparsers.add_parser(
         "guide",
@@ -181,7 +230,7 @@ def main() -> None:
         "topic",
         nargs="?",
         default="",
-        choices=["regression", "analyse", "summarise", "doctor", ""],
+        choices=["regression", "analyse", "summarise", "doctor", "init", ""],
         metavar="COMMAND",
         help="Command to show guide for (omit for overview of all commands).",
     )
@@ -195,6 +244,28 @@ def main() -> None:
 
     log = SessionLog.open(debug=getattr(args, "debug", False))
     exit_code = 0
+
+    def _require_config() -> bool:
+        """Return True if a valid qa-agent.yaml is found; print a clear error and
+        return False otherwise. Called before regression / analyse."""
+        from qa_agent.config import find_config, load_config, ConfigError
+        from qa_agent.output import bold, red, cyan, dim
+        cfg_path = find_config(Path.cwd())
+        if cfg_path is None:
+            print()
+            print(f"  {red('✖')}  No qa-agent.yaml found.")
+            print(f"  {dim('Run')}  {bold('qa-agent init')}  {dim('to set up your project config first.')}")
+            print()
+            return False
+        try:
+            load_config(cfg_path)   # validates required keys
+            return True
+        except Exception as exc:
+            print()
+            print(f"  {red('✖')}  Config error: {exc}")
+            print(f"  {dim('Fix it with')}  {bold('qa-agent config')}  {dim('or re-run')}  {bold('qa-agent init')}")
+            print()
+            return False
 
     try:
         if args.command == "hello":
@@ -215,6 +286,8 @@ def main() -> None:
             doctor_run(verbose=args.verbose)
 
         elif args.command == "analyse":
+            if not _require_config():
+                sys.exit(1)
             from qa_agent.analyse import run as analyse_run
             analyse_run(
                 mode=args.mode,
@@ -224,10 +297,13 @@ def main() -> None:
                 test_filter=args.test,
                 verbose=args.verbose,
                 debug=args.debug,
+                cmd_only=args.cmd,
                 log=log,
             )
 
         elif args.command == "regression":
+            if not _require_config():
+                sys.exit(1)
             from qa_agent.regression import run as regression_run
             regression_run(
                 source=getattr(args, "source", None),
@@ -236,6 +312,19 @@ def main() -> None:
                 debug=args.debug,
                 log=log,
             )
+
+        elif args.command == "init":
+            from qa_agent.init import run as init_run
+            init_run(
+                root=getattr(args, "root", None),
+                force=getattr(args, "force", False),
+                use_defaults=getattr(args, "use_defaults", False),
+                verbose=args.verbose,
+            )
+
+        elif args.command == "config":
+            from qa_agent.init import open_config
+            open_config(verbose=args.verbose)
 
         elif args.command == "guide":
             from qa_agent.guide import run as guide_run

@@ -267,9 +267,80 @@ def check_log_dir() -> list[CheckResult]:
 # Sections registry
 # ─────────────────────────────────────────────────────────────────────────────
 
+def check_project_config() -> list[CheckResult]:
+    """Validate qa-agent.yaml and all configured paths."""
+    from pathlib import Path
+    from qa_agent.config import find_config, load_config, validate_config, CONFIG_FILENAME
+
+    results: list[CheckResult] = []
+    cfg_path = find_config(Path.cwd())
+
+    if cfg_path is None:
+        results.append(CheckResult(
+            label=CONFIG_FILENAME,
+            status=Status.WARN,
+            detail="not found (walk up from CWD)",
+            fix="Run  qa-agent init  to create one",
+        ))
+        return results
+
+    try:
+        cfg = load_config(cfg_path)
+    except Exception as exc:
+        results.append(CheckResult(
+            label=CONFIG_FILENAME,
+            status=Status.ERROR,
+            detail=f"parse error: {exc}",
+            fix="Run  qa-agent config  or  qa-agent init --force  to fix",
+            raw=str(cfg_path),
+        ))
+        return results
+
+    results.append(CheckResult(
+        label=CONFIG_FILENAME,
+        status=Status.OK,
+        detail=f"found — project: {cfg.project_name}",
+        raw=str(cfg_path),
+    ))
+
+    errors = validate_config(cfg)
+    path_checks = [
+        ("project.root",                  cfg.project_root),
+        ("workspace.results_dir",          str(cfg.results_dir_path) if cfg.results_dir else ""),
+        ("files.source_file",              cfg.source_file),
+        ("files.basic_regression_script",  cfg.basic_regression_script),
+        ("files.slurm_regression_script",  cfg.slurm_regression_script),
+        ("files.slurm_run_script",         cfg.slurm_run_script),
+        ("files.slurm_config",             cfg.slurm_config),
+        ("files.debug_script",             cfg.debug_script),
+    ]
+
+    for label, raw_value in path_checks:
+        if not raw_value:
+            results.append(CheckResult(
+                label=label, status=Status.WARN,
+                detail="not configured",
+                raw="",
+            ))
+            continue
+        from pathlib import Path as _Path
+        p = cfg.resolve(raw_value) if raw_value != cfg.project_root else _Path(cfg.project_root)
+        status = Status.OK if p.exists() else Status.ERROR
+        results.append(CheckResult(
+            label=label,
+            status=status,
+            detail="exists" if p.exists() else "NOT FOUND",
+            fix=f"Update path in {CONFIG_FILENAME}" if not p.exists() else "",
+            raw=str(p),
+        ))
+
+    return results
+
+
 SECTIONS: list[tuple[str, list[Callable[[], list[CheckResult]]]]] = [
-    ("Runtime",    [check_python_version]),
-    ("Providers",  [check_claude, check_openai, check_gemini]),
+    ("Runtime",        [check_python_version]),
+    ("Project Config", [check_project_config]),
+    ("Providers",      [check_claude, check_openai, check_gemini]),
 ]
 
 

@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from qa_agent.config import find_config, load_config, CONFIG_FILENAME, DEFAULT_EP_FIXED_FLAGS, DEFAULT_RC_FIXED_FLAGS
 from qa_agent.errors import PathError, QAAgentError
 from qa_agent.output import bold, cyan, dim, green, red, rule, yellow, print_header, arrow_select, confirm, stream_with_esc_monitor
 from qa_agent.step_gate import StepLog, step_gate, write_log
@@ -79,74 +80,86 @@ def _is_rc(sys_ele: str) -> bool:
     return sys_ele.lower().startswith("rc")
 
 
-def _data_width_flags(typ: str) -> tuple[str, str]:
-    """Return (PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH) defines derived from typ (e.g. '4B')."""
-    m = re.search(r"(\d+)B", typ.upper())
-    if m:
-        bus_bytes = int(m.group(1))       # 4B → 4
-        width = bus_bytes * 4             # 4 → 16, 8 → 32
-        return f"+define+PIPE_BYTEWIDTH_{width}", f"+define+APCI_MAX_DATA_WIDTH={width}"
-    return "+define+PIPE_BYTEWIDTH_16", "+define+APCI_MAX_DATA_WIDTH=16"
+def _build_full_flags(
+    sys_ele: str,
+    gen: str,
+    num_lane: str,
+    flit_mode: str,
+    extra_flags: list[str] | None = None,
+) -> str:
+    """Build the complete +define+ flag string with extra flags inserted inline.
 
+    `extra_flags` (PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH from qa-agent.yaml) are
+    inserted at the correct position — after GEN5/GEN6_MAX_WIDTH_8 for EP,
+    after ROUTINE_RC for RC — producing the exact expected command output.
 
-def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str, typ: str) -> str:
-    """Expand parsed config fields into the +define+ simulator flag string for -R.
-
-    EP example (sys_ele=ep1, gen=GEN5, num_lane=4, flit_mode=NON_FLIT, typ=4B):
-        +define+APCI_NUM_LANES=4 +apci_gen5 +define+SIPC_GEN5
-        +define+SIPC_USE_NON_FLIT_MODE +define+SIPC_FASTER_MS_TICK
-        +define+GEN3_MAX_WIDTH_4 +define+GEN4_MAX_WIDTH_4
+    EP output (ep1, GEN6, lane4, FLIT, extras=[+define+PIPE_BYTEWIDTH_16, +define+APCI_MAX_DATA_WIDTH=16]):
+        +define+APCI_NUM_LANES=4 +apci_gen6 +define+SIPC_GEN6 +define+SIPC_USE_FLIT_MODE
+        +define+SIPC_FASTER_MS_TICK +define+GEN3_MAX_WIDTH_4 +define+GEN4_MAX_WIDTH_4
         +define+GEN5_MAX_WIDTH_4 +define+GEN6_MAX_WIDTH_8
         +define+PIPE_BYTEWIDTH_16 +define+APCI_MAX_DATA_WIDTH=16
         +define+GEN1_2_MAX_WIDTH_4 +licq
 
-    RC example (sys_ele=rc1, gen=GEN5, num_lane=4, flit_mode=NON_FLIT, typ=4B):
-        +define+SIPC_NUM_LANES=4 +define+APCI_NUM_LANES=4 +apci_gen5 +define+SIPC_GEN5
-        +define+SIPC_USE_NON_FLIT_MODE +define+SIPC_FASTER_MS_TICK +define+ROUTINE_RC
-        +define+GEN1_2_MAX_WIDTH_4 +define+PIPE_BYTEWIDTH_16 +define+APCI_MAX_DATA_WIDTH=16
+    RC output (rc1, GEN6, lane4, FLIT, extras=[+define+PIPE_BYTEWIDTH_16, +define+APCI_MAX_DATA_WIDTH=16]):
+        +define+SIPC_NUM_LANES=4 +define+APCI_NUM_LANES=4 +apci_gen6 +define+SIPC_GEN6
+        +define+SIPC_USE_FLIT_MODE +define+SIPC_FASTER_MS_TICK +define+ROUTINE_RC
+        +define+GEN1_2_MAX_WIDTH_4
+        +define+PIPE_BYTEWIDTH_16 +define+APCI_MAX_DATA_WIDTH=16
         +licq +define+RC_INITIATING_SPEED_CHANGE
     """
     rc = _is_rc(sys_ele)
-    gen_upper = gen.upper()   # e.g. GEN5
-    gen_lower = gen.lower()   # e.g. gen5
+    gen_upper = gen.upper()
+    gen_lower = gen.lower()
     fm_upper  = flit_mode.upper()
-    pb, adw   = _data_width_flags(typ)
+    extras    = list(extra_flags) if extra_flags else []
 
     flags: list[str] = []
 
     if rc:
-        # ── RC flag order ──────────────────────────────────────────────────────
+        # ── RC flag order ──────────────────────────────────────────────────────────
         flags.append(f"+define+SIPC_NUM_LANES={num_lane}")
         flags.append(f"+define+APCI_NUM_LANES={num_lane}")
         flags.append(f"+apci_{gen_lower}")
         flags.append(f"+define+SIPC_{gen_upper}")
         if "NON" in fm_upper:
             flags.append("+define+SIPC_USE_NON_FLIT_MODE")
+        else:
+            flags.append("+define+SIPC_USE_FLIT_MODE")
         flags.append("+define+SIPC_FASTER_MS_TICK")
         flags.append("+define+ROUTINE_RC")
         flags.append(f"+define+GEN1_2_MAX_WIDTH_{num_lane}")
-        flags.append(pb)
-        flags.append(adw)
+        flags.extend(extras)               # PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH
         flags.append("+licq")
         flags.append("+define+RC_INITIATING_SPEED_CHANGE")
     else:
-        # ── EP flag order ──────────────────────────────────────────────────────
+        # ── EP flag order ─────────────────────────────────────────────────────
         flags.append(f"+define+APCI_NUM_LANES={num_lane}")
         flags.append(f"+apci_{gen_lower}")
         flags.append(f"+define+SIPC_{gen_upper}")
         if "NON" in fm_upper:
             flags.append("+define+SIPC_USE_NON_FLIT_MODE")
+        else:
+            flags.append("+define+SIPC_USE_FLIT_MODE")
         flags.append("+define+SIPC_FASTER_MS_TICK")
         flags.append(f"+define+GEN3_MAX_WIDTH_{num_lane}")
         flags.append(f"+define+GEN4_MAX_WIDTH_{num_lane}")
         flags.append(f"+define+GEN5_MAX_WIDTH_{num_lane}")
         flags.append("+define+GEN6_MAX_WIDTH_8")
-        flags.append(pb)
-        flags.append(adw)
+        flags.extend(extras)               # PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH
         flags.append(f"+define+GEN1_2_MAX_WIDTH_{num_lane}")
         flags.append("+licq")
 
     return " ".join(flags)
+
+
+# Keep _build_config_flags as a compatibility alias (used by config_flags property)
+def _build_config_flags(sys_ele: str, gen: str, num_lane: str, flit_mode: str) -> str:
+    """Return only the dynamic (non-width) portion of the flag string.
+    
+    Width flags come from ep_fixed_flags / rc_fixed_flags in qa-agent.yaml.
+    For the full command string use _build_full_flags() instead.
+    """
+    return _build_full_flags(sys_ele, gen, num_lane, flit_mode, extra_flags=None)
 
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -176,11 +189,27 @@ class TestResult:
 
     @property
     def config_flags(self) -> str:
-        """Return the expanded +define+ simulator flags for -R (EP or RC flavour)."""
-        return _build_config_flags(self.sys_ele, self.gen, self.num_lane, self.flit_mode, self.typ)
+        """Return the dynamic +define+ simulator flags for -R (EP or RC flavour).
 
-    def debug_command(self, script: str) -> str:
+        Width flags (PIPE_BYTEWIDTH, APCI_MAX_DATA_WIDTH) are intentionally
+        excluded here — they are project-fixed constants that come from
+        ep_fixed_flags / rc_fixed_flags in qa-agent.yaml.
+        """
+        return _build_config_flags(self.sys_ele, self.gen, self.num_lane, self.flit_mode)
+
+    def debug_command(
+        self,
+        script: str,
+        ep_extra: list[str] | None = None,
+        rc_extra: list[str] | None = None,
+    ) -> str:
         """Return the full debug invocation command for this test result.
+
+        ep_extra / rc_extra are project-fixed flags from qa-agent.yaml
+        (typically PIPE_BYTEWIDTH and APCI_MAX_DATA_WIDTH). They are
+        inserted inline at the correct position in the flag sequence.
+
+        If None, falls back to DEFAULT_EP_FIXED_FLAGS / DEFAULT_RC_FIXED_FLAGS.
 
         EP format:  -T $SIG_PCIE_AVERY_TOP/sipc_top_ep1.sv
         RC format:  -T $SIG_PCIE_AVERY_TOP/sipc_top_rc1.sv  (sys_ele in filename)
@@ -188,11 +217,22 @@ class TestResult:
         effective_script = script or DEFAULT_SCRIPT
         test_file = self.test if self.test.endswith(".sv") else f"{self.test}.sv"
         top_sv = f"$SIG_PCIE_AVERY_TOP/sipc_top_{self.sys_ele}.sv"
+
+        if self.is_rc:
+            extra = rc_extra if rc_extra is not None else list(DEFAULT_RC_FIXED_FLAGS)
+        else:
+            extra = ep_extra if ep_extra is not None else list(DEFAULT_EP_FIXED_FLAGS)
+
+        all_flags = _build_full_flags(
+            self.sys_ele, self.gen, self.num_lane, self.flit_mode,
+            extra_flags=extra,
+        )
+
         return (
             f"{effective_script} -t {test_file} -s mti64 -visualizer -debug"
             f" -T {top_sv}"
             f" -file $SIG_PCIE_HOME/RTL/PCIeCore/sig_pcie_core_16B.f"
-            f' -R " {self.config_flags}" -n {self.seed}'
+            f' -R " {all_flags}" -n {self.seed}'
         )
 
 
@@ -385,6 +425,8 @@ def _run_debug(
     index: int,
     total: int,
     verbose: bool = False,
+    ep_extra: list[str] | None = None,
+    rc_extra: list[str] | None = None,
 ) -> DebugOutcome:
     """Build and execute the full debug command for one failure.
 
@@ -392,7 +434,7 @@ def _run_debug(
     Returns DebugOutcome regardless of success/failure/timeout.
     """
     log_file = debug_dir / "debug.log"
-    cmd = result.debug_command(script)
+    cmd = result.debug_command(script, ep_extra=ep_extra, rc_extra=rc_extra)
 
     exec_shell = None
     use_shell = True
@@ -602,12 +644,28 @@ def run(
     test_filter: str | None = None,
     verbose: bool = False,
     debug: bool = False,
+    cmd_only: bool = False,
     log: object = None,
 ) -> None:
     wd = Path(working_dir).resolve()
-    package_dir = Path(__file__).parent  # qa_agent/
 
-    print_header("analyse", f"Mode: {mode or 'auto-detect'}")
+    if not cmd_only:
+        print_header("analyse", f"Mode: {mode or 'auto-detect'}")
+
+    # ── Load project config ────────────────────────────────────────────────────
+    from qa_agent.errors import ConfigError
+    cfg_path = find_config(wd)
+    if cfg_path is None:
+        raise ConfigError(
+            f"No {CONFIG_FILENAME} found. Run  qa-agent init  to create one."
+        )
+    cfg = load_config(cfg_path)
+    if not cmd_only:
+        print(f"  {dim('Using config:')} {dim(str(cfg_path))}")
+        print()
+
+    ep_extra = cfg.ep_fixed_flags
+    rc_extra = cfg.rc_fixed_flags
 
     effective_mode = "basic"  # will be set during parsing
     step_log = StepLog(command="analyse", mode="basic")
@@ -623,30 +681,28 @@ def run(
 
     # ── Step 1: find and read results file ────────────────────────────────────
     with step_gate(1, "Read results file", debug, step_log) as ctx:
-        results_path = _find_results(wd)
-        
-        # Check for sig_pcie in the path
-        sig_pcie_dir = None
-        for parent in wd.parents:
-            if parent.name == "sig_pcie":
-                sig_pcie_dir = parent
+        # Use config-defined output filenames for detection
+        result_candidates = [cfg.basic_output, cfg.slurm_output]
+        results_path = None
+        for name in result_candidates:
+            p = wd / name
+            if p.exists():
+                results_path = p
                 break
-        if wd.name == "sig_pcie":
-            sig_pcie_dir = wd
-            
-        if not sig_pcie_dir:
-            ctx.fail("sig_pcie not found in the current working directory path.")
-            
-        if sig_pcie_dir and "sig_pcie/verif/AVERY/run/results" not in wd.as_posix():
-             ctx.fail("cwd must be within sig_pcie/verif/AVERY/run/results.")
-             
-        ctx.detail = f"Path: {results_path}"
+        if results_path is None:
+            ctx.fail(
+                f"No results file found in {wd}.\n"
+                f"  Expected: {' or '.join(result_candidates)}"
+            )
+        else:
+            ctx.detail = f"Path: {results_path}"
     if not ctx.ok:
         log_path = write_log(step_log, wd)
         print(f"\n  {cyan('ℹ')}  Log: {log_path}")
         return
 
-    print(f"\n  {green('✓')}  Reading results from: {results_path}")
+    if not cmd_only:
+        print(f"\n  {green('✓')}  Reading results from: {results_path}")
 
     # ── Step 2: detect mode & parse ───────────────────────────────────────────
     with step_gate(2, "Parse results", debug, step_log) as ctx:
@@ -686,49 +742,65 @@ def run(
             print(f"\n  {cyan('ℹ')}  Log: {log_path}")
             raise QAAgentError(ctx.error)
 
-        print(f"  {yellow('⚑')}  --test filter active: "
-              f"focusing on '{bold(test_filter)}' "
-              f"{dim(f'({len(failed)} match(es))')}")
+        if not cmd_only:
+            print(f"  {yellow('⚑')}  --test filter active: "
+                  f"focusing on '{bold(test_filter)}' "
+                  f"{dim(f'({len(failed)} match(es))')}")
 
-    # Banner
-    print()
-    print(rule())
-    print(f"  {cyan('qa-agent analyse')}  {dim('·')}  {bold(results_path.name)}  {dim(f'[{effective_mode}]')}")
-    print(
-        f"  {green(f'Passed: {len(passed)}')}   "
-        f"{(red if failed else dim)(f'Failed: {len(failed)}')}"
-        + (f"  {dim(f'(filtered to: {test_filter})')}" if test_filter else "")
-    )
-    print(rule())
+    if not cmd_only:
+        # Banner
+        print()
+        print(rule())
+        print(f"  {cyan('qa-agent analyse')}  {dim('·')}  {bold(results_path.name)}  {dim(f'[{effective_mode}]')}")
+        print(
+            f"  {green(f'Passed: {len(passed)}')}   "
+            f"{(red if failed else dim)(f'Failed: {len(failed)}')}"
+            + (f"  {dim(f'(filtered to: {test_filter})')}" if test_filter else "")
+        )
+        print(rule())
 
-    unique_failing = len({r.test for r in failed})
-    print(f"\n  Found {bold(str(len(failed)))} failed test(s) across {bold(str(unique_failing))} unique test name(s).\n")
+        unique_failing = len({r.test for r in failed})
+        print(f"\n  Found {bold(str(len(failed)))} failed test(s) across {bold(str(unique_failing))} unique test name(s).\n")
 
-    # ── Step 4: Find sig_pcie source and script ───────────────────────────────
+    # ── Step 4: Locate source file and debug script from config ───────────────
     step_offset = 1 if test_filter else 0
     with step_gate(3 + step_offset, "Locate source file and script", debug, step_log) as ctx:
-        if sig_pcie_dir:
-            source_file = sig_pcie_dir / "sourcefile_2025_3.csh"
-            if not source_file.exists():
-                source_file = None
-            
-            pl_script = sig_pcie_dir / "verif/AVERY/run/run_apci_2025.pl"
-            if pl_script.exists():
-                effective_script = str(pl_script)
+        source_file = cfg.source_file_path
+        if source_file and not source_file.exists():
+            print(f"  {yellow('⚠')}  source_file from config not found: {source_file}")
+            source_file = None
+
+        if not script:
+            ds = cfg.debug_script_path
+            if ds and ds.exists():
+                effective_script = str(ds)
+            elif ds:
+                print(f"  {yellow('⚠')}  debug_script from config not found: {ds}")
+                effective_script = ""
             else:
                 effective_script = ""
-                
-            ctx.detail = f"source: {source_file.name if source_file else 'None'}, script: {Path(effective_script).name if effective_script else 'None'}"
         else:
-            ctx.fail("sig_pcie_dir is somehow missing.")
-            
+            effective_script = script
+
+        ctx.detail = (
+            f"source: {source_file.name if source_file else 'None'}, "
+            f"script: {Path(effective_script).name if effective_script else 'None'}"
+        )
+
     if not ctx.ok:
         log_path = write_log(step_log, wd)
         print(f"\n  {cyan('ℹ')}  Log: {log_path}")
         return
-        
-    print(f"  {green('✓')}  Using source file: {source_file if source_file else 'None'}")
-    print(f"  {green('✓')}  Using script: {effective_script if effective_script else 'None'}")
+
+    if not cmd_only:
+        print(f"  {green('✓')}  Using source file: {source_file if source_file else dim('(none)')}")
+        print(f"  {green('✓')}  Using script: {effective_script if effective_script else dim('(none)')}")
+
+    # ── --cmd mode: print debug commands and exit ─────────────────────────────
+    if cmd_only:
+        for result in failed:
+            print(result.debug_command(effective_script, ep_extra=ep_extra, rc_extra=rc_extra))
+        return
 
     # ── Step 5: create debug directories ──────────────────────────────────────
     if failed:
@@ -757,6 +829,8 @@ def run(
                 outcome = _run_debug(
                     result, debug_dirs[result], effective_script, source_file, i, len(failed),
                     verbose=verbose,
+                    ep_extra=ep_extra,
+                    rc_extra=rc_extra,
                 )
                 ctx.detail = f"exit={outcome.exit_code}"
                 if outcome.timed_out:

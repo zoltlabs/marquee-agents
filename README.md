@@ -58,6 +58,10 @@ For a regression with **10+ failures**, this takes **hours** — and most of it 
 ### AI Summarisation (`qa-agent summarise`) — available now
 - **Summarises** source files, directories, or configs using Claude, OpenAI, or Gemini
 
+### Configuration (`qa-agent init`)
+- **Discovers** project paths, regression scripts, and debug tools automatically
+- **Manages** a central `qa-agent.yaml` file so the tool works seamlessly across projects
+
 ### AI-Driven Triage — roadmap
 - Automated root-cause correlation across multiple failures
 - Natural-language triage report generation
@@ -186,6 +190,8 @@ qa-agent <command> [options]
 |---------|-------------|
 | `hello` | ASCII logo welcome screen and quick start info |
 | `guide [COMMAND]` | Short practical user guide for any command; omit for overview of all |
+| `init` | Interactive wizard to discover project files and write `qa-agent.yaml` |
+| `config` | Open `qa-agent.yaml` in your editor for manual editing |
 | `doctor` | Check that all SDKs and credentials are correctly configured |
 | `summarise [PATH …]` | Summarise files or directories using AI |
 | `analyse` | Parse a regression results file, run debug commands per failure, and write a grouped Markdown QA report |
@@ -226,6 +232,29 @@ qa-agent guide regression         # guide for regression command
 qa-agent guide analyse            # guide for analyse command
 qa-agent guide summarise          # guide for summarise command
 qa-agent guide doctor             # guide for doctor command
+```
+
+---
+
+### `qa-agent init`
+
+Interactive wizard that sets up `qa-agent` for a new project workspace. It auto-detects Regression and Debug scripts, configures output filenames, and saves to `qa-agent.yaml`.
+
+```bash
+qa-agent init                        # auto-detect project root and run wizard
+qa-agent init /path/to/my_project    # specify project root explicitly
+qa-agent init --force                # overwrite existing config
+qa-agent init --use_defaults         # skip interactive prompts and auto-accept defaults
+```
+
+---
+
+### `qa-agent config`
+
+Opens the project's `qa-agent.yaml` configuration file in your preferred editor (`$EDITOR`, defaults to `vim`).
+
+```bash
+qa-agent config
 ```
 
 ---
