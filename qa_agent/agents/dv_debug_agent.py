@@ -1,74 +1,42 @@
 """qa_agent/agents/dv_debug_agent.py
 
-DV Debug Expert agent: system prompt, investigation strategy, and orchestration.
+DV Debug Expert agent — stream-based (prefetch model).
 
-This module defines the expert DV engineer persona that drives the report
-command's agentic loop.  It builds the initial message list and calls
-run_tool_loop() to completion, then returns the markdown report.
+All simulation data is pre-fetched by report_prefetch.collect_sim_data() and
+embedded directly into the user prompt.  The AI receives one large context block
+and produces the debug report in a single streaming pass.
+
+Uses claude-agent-sdk under the hood (via claude_provider.stream), so auth is
+handled by `claude login` or ANTHROPIC_API_KEY env var — no direct API key
+reference in code.
+
+The original agentic (tool-calling) agent is preserved at:
+    qa_agent/agents/dv_debug_agent_agentic.py
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from qa_agent.providers import ProviderRequest
 
-from qa_agent.tools.registry import ToolRegistry
-from qa_agent.tools.loop import run_tool_loop
 
 # ─────────────────────────────────────────────────────────────────────────────
-# System prompt — DV debug expert persona
+# System prompt — DV debug expert persona (single-pass analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
 You are an expert Design Verification (DV) engineer specialising in PCIe / APCI \
-silicon verification using Questa Sim. Your task is to investigate a failing simulation \
-run and produce a structured Markdown debug report.
+silicon verification using Questa Sim. Your task is to analyse the simulation output \
+data provided in the context block below and produce a structured Markdown debug report.
 
-## Simulation Data Access
+## Analysis Guidelines
 
-You have NO direct access to files. All data arrives through tool calls:
-
-- list_sim_files       — discover what files exist
-- read_sim_metadata    — read metadata (argv, history, stats, DU list, version)
-- extract_log_errors   — grep error/warning lines from log files (with context)
-- get_assertion_failures  — extract SVA assertion failures (structured)
-- get_scoreboard_mismatches — extract scoreboard mismatch summary
-- extract_tracker_failures  — get tracker events around the failure time
-- read_signal_values   — read signal values at a specific simulation time
-
-## Investigation Strategy
-
-Follow these steps IN ORDER. Stop early when you have enough evidence.
-
-1. **List available files** — call list_sim_files() and list_sim_files("qrun.out").
-   Understand what data is available before diving in.
-
-2. **Read metadata** — call read_sim_metadata("big_argv") to get the full simulation
-   command (flags, seeds, test name). Also read "version" for tool version context.
-
-3. **Check compile log first** — call extract_log_errors("compile.log").
-   Compilation errors explain many failures before simulation even starts.
-
-4. **Check sim log** — call extract_log_errors("sim.log") with the default pattern,
-   then optionally with a more specific pattern if needed.
-
-5. **Check assertions** — if assertion keywords appeared in step 4, call
-   get_assertion_failures().
-
-6. **Check scoreboard** — if mismatch keywords appeared, call
-   get_scoreboard_mismatches().
-
-7. **Check tracker around failure time** — use extract_tracker_failures() with a
-   time window centred on the first failure. This gives temporal context.
-
-8. **Check signals only if necessary** — call read_signal_values() ONLY if a specific
-   signal name was mentioned in an error message AND you need its value at failure time.
-
-## Efficiency Rules
-
-- Request only the data you need — do not dump entire logs.
-- Use specific regex patterns when searching (e.g. "assertion|SVA" not just "error").
-- Stop investigating when you have identified the root cause with sufficient evidence.
-- If compile errors exist, report them immediately without investigating sim logs.
+- All simulation data is provided below — there are no tool calls in this session.
+- Analyse the **Compile Log** first. If compile errors are present, classify and \
+report them immediately — do not look further into the sim log.
+- If the compile log is clean, analyse **Sim Log** errors, assertion failures, and \
+scoreboard mismatches.
+- Use **Tracker Failures** for temporal context around the first failure timestamp.
+- Summarise findings concisely — do not repeat raw log output verbatim in the report.
 
 ## Output Format
 
@@ -102,8 +70,34 @@ or waveform timestamps the engineer should examine.
 ```
 
 Do NOT include any text before the `## Root Cause Summary` header.
-Do NOT include unnecessary tool output in the report — summarise findings concisely.
+Do NOT repeat raw log lines — summarise what they mean.
 """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompt helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_prompt(sim_data: str) -> ProviderRequest:
+    """Build the ProviderRequest from pre-fetched sim data.
+
+    Args:
+        sim_data: Markdown context block from report_prefetch.collect_sim_data().
+
+    Returns:
+        A ProviderRequest ready to pass to any provider's stream() function.
+    """
+    user_prompt = (
+        "Please analyse the following simulation output data and write the "
+        "structured Markdown debug report as instructed.\n\n"
+        + sim_data
+    )
+    return ProviderRequest(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        allowed_tools=[],
+        max_turns=1,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,63 +105,42 @@ Do NOT include unnecessary tool output in the report — summarise findings conc
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def run_dv_debug_agent(
-    sim_dir: Path,
-    tools: ToolRegistry,
+    sim_data: str,
     *,
     provider: str = "claude",
-    max_turns: int = 15,
-    model: str = "",
     verbose: bool = False,
-    gvim: bool = False,
 ) -> str:
-    """Run the DV debug expert agent on a simulation output directory.
+    """Run the DV debug expert agent with pre-fetched sim data.
+
+    Calls the chosen provider's stream() interface — no tool-calling or API key
+    required beyond what the provider's auth layer expects (claude-agent-sdk
+    handles auth via `claude login` or ANTHROPIC_API_KEY env var).
 
     Args:
-        sim_dir:   Path to the simulation output directory (for display only;
-                   tool handlers are already bound to it in the registry).
-        tools:     Pre-built ToolRegistry from build_report_tools().
-        provider:  AI provider: "claude", "openai", or "gemini".
-        max_turns: Maximum agentic investigation turns.
-        model:     Optional model override.
-        verbose:   If True, print tool calls and results to stdout.
+        sim_data: Pre-fetched simulation context from collect_sim_data().
+        provider: AI provider name — "claude", "openai", or "gemini".
+        verbose:  If True, stream chunks to stdout as they arrive.
 
     Returns:
-        Markdown string containing the structured debug report.
+        Markdown string: the complete structured debug report.
     """
-    messages: list[dict] = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                f"Please investigate the failing simulation in: {sim_dir}\n\n"
-                "Start by listing available files to understand what data exists, "
-                "then follow the investigation strategy in your instructions. "
-                "Write the structured Markdown report when you have sufficient evidence."
-            ),
-        },
-    ]
+    if provider == "claude":
+        from qa_agent import claude_provider as mod
+    elif provider == "openai":
+        from qa_agent import openai_provider as mod
+    elif provider == "gemini":
+        from qa_agent import gemini_provider as mod
+    else:
+        raise ValueError(
+            f"Unknown provider '{provider}'. Choose: claude, openai, gemini."
+        )
 
-    def _on_tool_call(name: str, args: dict) -> None:
-        from qa_agent.output import dim, cyan
-        args_preview = ", ".join(f"{k}={repr(v)}" for k, v in list(args.items())[:3])
-        print(f"  {dim('→')} {cyan(name)}({args_preview})")
+    request = build_prompt(sim_data)
 
-    def _on_tool_result(name: str, content: str, truncated: bool) -> None:
-        from qa_agent.output import dim, yellow
-        lines = content.strip().count("\n") + 1
-        trunc_note = f" {yellow('[TRUNCATED]')}" if truncated else ""
-        print(f"  {dim('←')} {name}: {lines} lines{trunc_note}")
+    chunks: list[str] = []
+    async for chunk in mod.stream(request):
+        chunks.append(chunk)
+        if verbose:
+            print(chunk, end="", flush=True)
 
-    report = await run_tool_loop(
-        provider_name=provider,
-        messages=messages,
-        tools=tools,
-        max_turns=max_turns,
-        model=model,
-        verbose=verbose,
-        use_gvim=gvim,
-        on_tool_call=_on_tool_call if verbose else None,
-        on_tool_result=_on_tool_result if verbose else None,
-    )
-
-    return report
+    return "".join(chunks)

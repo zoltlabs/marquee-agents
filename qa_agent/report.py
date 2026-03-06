@@ -1,14 +1,31 @@
 """qa_agent/report.py
 
-Orchestrator for the `qa-agent report` command.
+Orchestrator for the `qa-agent report` command — stream-based (prefetch model).
 
-Coordinates the CLI arguments, the AI provider, the ToolRegistry, and the
-DV debug agent. Runs the agentic loop and writes the final markdown report.
+Flow:
+  1. Validate simulation directory.
+  2. Pre-fetch all sim data via report_prefetch.collect_sim_data() — pure Python,
+     no AI involved.  All tool security rules (path containment, output caps,
+     allowlists) still apply.
+  3. Optionally show the assembled prompt in gvim for review (--gvim).
+  4. Stream the AI response via agents/dv_debug_agent.run_dv_debug_agent() which
+     uses claude-agent-sdk under the hood — no ANTHROPIC_API_KEY required in code.
+  5. Write the structured Markdown report to disk.
+
+The original agentic (tool-calling) approach is preserved — its loop, registry,
+and agent are in:
+    qa_agent/tools/loop.py
+    qa_agent/tools/report/
+    qa_agent/agents/dv_debug_agent_agentic.py
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
+import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -32,9 +49,10 @@ def run(
         sim_dir:   Path to the simulation output directory.
         provider:  AI provider name ("claude", "openai", "gemini").
         output:    Output markdown file path. Defaults to debug_report_<ts>.md.
-        max_turns: Maximum number of agentic tool turns.
-        verbose:   Print detailed progress and tool calls.
+        max_turns: Unused in stream mode — kept for CLI compatibility.
+        verbose:   Print detailed progress and stream AI output to stdout.
         debug:     Developer mode (+ session log).
+        gvim:      Show assembled prompt in gvim for review before sending to AI.
         log:       Active SessionLog instance.
     """
     if verbose or debug:
@@ -62,27 +80,72 @@ def run(
     if log:
         log.event("report start", sim_dir=str(sim_path), provider=provider)
 
-    # 3. Build tool registry
-    from qa_agent.tools.report import build_report_tools
-    print(f"\n  {dim('Building tool registry...')} ", end="", flush=True)
-    tools = build_report_tools(sim_path)
-    print(f"{green('OK')} {dim(f'({len(tools.all_defs())} tools bound to target)')}")
+    # 3. Pre-fetch all simulation data
+    print(f"\n  {dim('Collecting simulation data...')} ", end="", flush=True)
+    try:
+        from qa_agent.report_prefetch import collect_sim_data
+        sim_data = collect_sim_data(sim_path)
+    except Exception as exc:
+        print(f"{red('FAILED')}")
+        print_rich_error(f"Data collection failed: {exc}")
+        raise
 
-    # 4. Run the inner async investigation loop
-    print(f"  {dim('Starting AI investigation (max turns:')} {max_turns}{dim(')...')}")
-    print()
+    data_lines = sim_data.count("\n")
+    print(f"{green('OK')} {dim(f'({data_lines} lines collected)')}")
 
-    from qa_agent.agents.dv_debug_agent import run_dv_debug_agent
+    # 4. Build the full prompt for review / sending
+    from qa_agent.agents.dv_debug_agent import build_prompt
+    request = build_prompt(sim_data)
+
+    # 5. Optional gvim review — show the full assembled prompt before sending
+    if gvim:
+        dump_file = Path(tempfile.gettempdir()) / "qa_agent_report_prompt.md"
+        dump_text = (
+            "# qa-agent report — Assembled Prompt\n\n"
+            f"**Provider:** {provider}\n"
+            f"**Sim dir:** {sim_path}\n\n"
+            "---\n\n"
+            "## SYSTEM PROMPT\n\n"
+            f"{request.system_prompt}\n\n"
+            "---\n\n"
+            "## USER PROMPT (with embedded sim data)\n\n"
+            f"{request.user_prompt}\n"
+        )
+        dump_file.write_text(dump_text, encoding="utf-8")
+
+        try:
+            subprocess.run(
+                ["gvim", "-f", str(dump_file)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as exc:
+            print(f"  {dim(f'Warning: could not open gvim: {exc}')}")
+
+        from qa_agent.output import arrow_select
+        try:
+            ans = arrow_select(
+                f"{bold('?')} Review complete. Send this prompt to the AI?",
+                [("Proceed", "send to AI"), ("Stop", "abort and exit")],
+            )
+            if ans != 0:
+                print("  Aborted by user.")
+                sys.exit(0)
+        except KeyboardInterrupt:
+            print("\n  Aborted by user.")
+            sys.exit(0)
+
+    # 6. Run the stream-based AI agent
+    print(f"  {dim('Sending to AI')} {dim('(' + provider + ')...')}")
+    if verbose:
+        print()
 
     try:
         report_text = asyncio.run(
-            run_dv_debug_agent(
-                sim_dir=sim_path,
-                tools=tools,
+            _run_agent(
+                sim_data=sim_data,
                 provider=provider,
-                max_turns=max_turns,
                 verbose=verbose,
-                gvim=gvim,
             )
         )
     except Exception as exc:
@@ -94,10 +157,11 @@ def run(
             print(f"  {dim('Run with')} {bold('--verbose')} {dim('for a full traceback.')}")
         raise
 
-    # 5. Write the final report
-    print()
-    print(f"  {dim('Writing report...')} ", end="", flush=True)
+    if verbose:
+        print()
 
+    # 7. Write the final report
+    print(f"\n  {dim('Writing report...')} ", end="", flush=True)
     try:
         out_path.write_text(report_text, encoding="utf-8")
         print(f"{green('OK')}")
@@ -113,3 +177,9 @@ def run(
         raise
 
     print()
+
+
+async def _run_agent(sim_data: str, provider: str, verbose: bool) -> str:
+    """Async wrapper around run_dv_debug_agent."""
+    from qa_agent.agents.dv_debug_agent import run_dv_debug_agent
+    return await run_dv_debug_agent(sim_data, provider=provider, verbose=verbose)
