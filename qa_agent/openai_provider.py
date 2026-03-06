@@ -106,11 +106,11 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
 
     Args:
         request: A ProviderRequest containing system_prompt, user_prompt,
-                 agent_cwd, allowed_tools, and max_turns.
+                 allowed_tools, and max_turns.
                  Build this in the command orchestrator (e.g. summarise.py).
 
     Note:
-        `allowed_tools` and `agent_cwd` from ProviderRequest are used to
+        `allowed_tools` from ProviderRequest are used to
         construct a sandboxed file-reading context — the system prompt already
         constrains the model to operate within those bounds at the prompt level.
         OpenAI chat completions do not execute tools natively here; tool
@@ -133,17 +133,10 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
 
     client = AsyncOpenAI(api_key=api_key)
 
-    # Inject cwd and file-list context into the system prompt so the model
-    # knows its operating scope even without native tool execution.
-    system_ctx = (
-        f"{request.system_prompt}\n\n"
-        f"Working directory: {request.agent_cwd}"
-    )
-
     response = await client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": system_ctx},
+            {"role": "system", "content": request.system_prompt},
             {"role": "user",   "content": request.user_prompt},
         ],
         stream=True,

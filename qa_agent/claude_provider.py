@@ -81,7 +81,7 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
 
     Args:
         request: A ProviderRequest containing system_prompt, user_prompt,
-                 agent_cwd, allowed_tools, and max_turns.
+                 allowed_tools, and max_turns.
                  Build this in the command orchestrator (e.g. summarise.py),
                  not here.
     """
@@ -97,7 +97,6 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
     options = ClaudeAgentOptions(
         allowed_tools=request.allowed_tools,
         system_prompt=request.system_prompt,
-        cwd=request.agent_cwd,
         env=env_override,
         max_turns=request.max_turns,
     )

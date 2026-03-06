@@ -40,45 +40,13 @@ if TYPE_CHECKING:
 # into the prompt. This ensures the AI model only ever sees files that the
 # orchestrator explicitly chooses to send — it cannot glob, read, or traverse
 # the disk on its own.
-#
-# Previously "claude" was listed here to use its Glob + Read tools, but that
-# granted the model unbounded read access to the filesystem from agent_cwd.
-# All providers now use the inline (non-agentic) path exclusively.
-_AGENTIC_PROVIDERS: set[str] = set()  # intentionally empty — see note above
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompts (summarise-specific; providers are unaware of these)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Agentic variants (Claude) — model reads files via tools ──────────────────
-_SYSTEM_PROMPT_DIRECTORY_AGENTIC = (
-    "You are a codebase explainer. "
-    "You have access to Glob and Read tools for the current directory only. "
-    "Do NOT access paths outside the working directory. "
-    "Output ONLY in the following format:\n\n"
-    "## Directory Structure\n"
-    "<ASCII tree of the directory>\n\n"
-    "## File Explanations\n"
-    "<For each file: use '### <relative path>' as a heading, then 1–3 sentences "
-    "describing its purpose and what it does. Be concise and precise.>"
-)
 
-_USER_PROMPT_DIRECTORY_AGENTIC = (
-    "Summarise this directory. "
-    "First glob all files recursively, then read each one, "
-    "and produce the ASCII directory tree followed by per-file explanations."
-)
-
-_SYSTEM_PROMPT_FILES_AGENTIC = (
-    "You are a codebase explainer. "
-    "You have access to the Read tool only. "
-    "Do NOT access paths outside those explicitly given to you. "
-    "Output ONLY in the following format:\n\n"
-    "## File Explanations\n"
-    "<For each file: use '### <file path>' as a heading, then 1–3 sentences "
-    "describing its purpose and what it does. Be concise and precise.>"
-)
 
 # ── Inline variants (Gemini, OpenAI) — file content embedded in the prompt ───
 _SYSTEM_PROMPT_INLINE = (
@@ -231,62 +199,32 @@ def _build_request(
 ) -> ProviderRequest:
     """Construct a ProviderRequest from resolved paths.
 
-    Agentic providers (Claude) receive a short tool-call prompt and the SDK
-    will use Glob + Read to explore the filesystem itself.
-
-    Non-agentic providers (Gemini, OpenAI) receive the full file contents
-    inlined into the prompt so they cannot hallucinate files.
+    All providers receive the full file contents inlined into the prompt
+    so they cannot hallucinate files and have no direct file access.
     """
     extra: dict = {"verbose": verbose}
-    is_agentic = provider_name in _AGENTIC_PROVIDERS
     is_dir_mode = not abs_paths or (len(abs_paths) == 1 and os.path.isdir(abs_paths[0]))
 
-    if is_agentic:
-        # ── Claude: let the SDK handle file access ────────────────────────────
-        if is_dir_mode:
-            target_dir = abs_paths[0] if abs_paths else cwd
-            return ProviderRequest(
-                system_prompt=_SYSTEM_PROMPT_DIRECTORY_AGENTIC,
-                user_prompt=_USER_PROMPT_DIRECTORY_AGENTIC,
-                agent_cwd=target_dir,
-                allowed_tools=["Glob", "Read"],
-                extra=extra,
-            )
-        else:
-            return ProviderRequest(
-                system_prompt=_SYSTEM_PROMPT_FILES_AGENTIC,
-                user_prompt=(
-                    "Summarise the following files:\n"
-                    + "\n".join(f"  - {p}" for p in abs_paths)
-                    + "\n\nRead each file and produce per-file explanations."
-                ),
-                agent_cwd=cwd,
-                allowed_tools=["Read"],
-                extra=extra,
-            )
+    # ── Gemini / OpenAI / Claude: inline all file content in the prompt ────────────
+    if is_dir_mode:
+        target_dir = abs_paths[0] if abs_paths else cwd
+        files = _collect_dir_files(target_dir)
+        user_prompt = _build_inline_prompt(target_dir, files)
+        return ProviderRequest(
+            system_prompt=_SYSTEM_PROMPT_INLINE,
+            user_prompt=user_prompt,
+            allowed_tools=[],
+            extra=extra,
+        )
     else:
-        # ── Gemini / OpenAI: inline all file content in the prompt ────────────
-        if is_dir_mode:
-            target_dir = abs_paths[0] if abs_paths else cwd
-            files = _collect_dir_files(target_dir)
-            user_prompt = _build_inline_prompt(target_dir, files)
-            return ProviderRequest(
-                system_prompt=_SYSTEM_PROMPT_INLINE,
-                user_prompt=user_prompt,
-                agent_cwd=target_dir,
-                allowed_tools=[],
-                extra=extra,
-            )
-        else:
-            files = [(p, _read_file_safe(p)) for p in abs_paths]
-            user_prompt = _build_inline_files_prompt(files)
-            return ProviderRequest(
-                system_prompt=_SYSTEM_PROMPT_INLINE_FILES,
-                user_prompt=user_prompt,
-                agent_cwd=cwd,
-                allowed_tools=[],
-                extra=extra,
-            )
+        files = [(p, _read_file_safe(p)) for p in abs_paths]
+        user_prompt = _build_inline_files_prompt(files)
+        return ProviderRequest(
+            system_prompt=_SYSTEM_PROMPT_INLINE_FILES,
+            user_prompt=user_prompt,
+            allowed_tools=[],
+            extra=extra,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

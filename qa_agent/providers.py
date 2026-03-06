@@ -29,7 +29,6 @@ class ProviderRequest:
     Attributes:
         system_prompt:  Instruction text placed in the system role.
         user_prompt:    The user-facing message / task description.
-        agent_cwd:      Working directory the AI agent should operate in.
         allowed_tools:  Tool names the AI may call (provider-specific names).
                         Defaults to an empty list (no tools).
         max_turns:      Maximum agentic turns / round-trips.
@@ -39,7 +38,6 @@ class ProviderRequest:
 
     system_prompt: str
     user_prompt: str
-    agent_cwd: str
     allowed_tools: list[str] = field(default_factory=list)
     max_turns: int = 10
     extra: dict = field(default_factory=dict)

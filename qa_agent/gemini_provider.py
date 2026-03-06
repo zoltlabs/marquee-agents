@@ -111,7 +111,7 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
 
     Args:
         request: A ProviderRequest containing system_prompt, user_prompt,
-                 agent_cwd, allowed_tools, and max_turns.
+                 allowed_tools, and max_turns.
                  Build this in the command orchestrator (e.g. summarise.py).
 
     Extra keys (ProviderRequest.extra):
@@ -131,14 +131,8 @@ async def stream(request: ProviderRequest) -> AsyncIterator[str]:
 
     client = genai.Client(**client_kwargs)
 
-    # Combine system prompt with the cwd context
-    system_instruction = (
-        f"{request.system_prompt}\n\n"
-        f"Working directory: {request.agent_cwd}"
-    )
-
     config = types.GenerateContentConfig(
-        system_instruction=system_instruction,
+        system_instruction=request.system_prompt,
         max_output_tokens=request.extra.get("max_tokens", 4096),
         temperature=request.extra.get("temperature", 0.2),
     )

@@ -24,8 +24,10 @@ High-level overview. For per-command implementation detail, see [`IMPLEMENTATION
 
 1. **Regression** (`qa-agent regression`) — sources the shell environment, locates filelist/config files, runs basic or Slurm regressions with live output, and captures a timestamped log.
 2. **Triage** (`qa-agent analyse`) — parses results files, reconstructs configs + seeds for every failure, re-runs debug scripts in isolated subdirs, and writes a grouped Markdown QA report.
-3. **AI summarisation** (`qa-agent summarise`) — sends source files to Claude, OpenAI, or Gemini for structured explanation. *Available now.*
-4. **AI-driven triage** (`qa-agent report`) — automated root-cause correlation and natural-language report generation using agentic tool-calling. *Available now.*
+3. **AI summarisation** (`qa-agent summarise`) — explicitly embeds source files provided into prompts for Claude, OpenAI, or Gemini for structured explanation (AI has no direct open file/folder access). *Available now.*
+4. **AI-driven triage** (`qa-agent report`) — automated root-cause correlation and natural-language report generation using strictly sandboxed tool-calling (AI has no direct open file/folder access). *Available now.*
+
+> **Security Note:** No providers (Claude, Gemini, or Codex/OpenAI) are granted direct access to folders or files in the repository. The AI only interacts with data via explicitly allowed tool calls or manually provided file content, ensuring the AI won't have context of anything else in the repo.
 
 For 10+ failures this turns hours of mechanical work into a single command.
 
