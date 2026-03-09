@@ -386,15 +386,7 @@ _TRACKER_FAILURE_RE = re.compile(
 
 
 def _collect_tracker_data(sim_dir: Path, files: dict[str, list[Path]]) -> str:
-    """Extract failure events from tracker_*.txt files.
-
-    Only collects:
-      - ASSERT failures
-      - SCOREBOARD mismatches
-      - TIMEOUT events
-      - FATAL errors
-      - Transaction mismatches
-    """
+    """Extract ALL contents from tracker_*.txt files (context cap removed)."""
     tracker_files = files.get("tracker", [])
     if not tracker_files:
         return "*No tracker files found*\n"
@@ -407,26 +399,15 @@ def _collect_tracker_data(sim_dir: Path, files: dict[str, list[Path]]) -> str:
             continue
 
         lines = content.splitlines()
-        failure_lines = [
-            line for line in lines if _TRACKER_FAILURE_RE.search(line)
-        ]
-
-        if failure_lines:
-            parts.append(
-                f"### {path.name} — {len(failure_lines)} failure event(s) "
-                f"(of {len(lines)} total lines)\n"
-                f"```\n{chr(10).join(failure_lines[:200])}\n```\n"
-            )
-        # Skip files with no matching failures entirely — no noise
-
-    if not parts:
-        return (
-            "*No tracker failure events found across "
-            f"{len(tracker_files)} tracker file(s). "
-            "No ASSERT / SCOREBOARD / TIMEOUT / FATAL / transaction mismatch entries.*\n"
+        parts.append(
+            f"### {path.name} ({len(lines)} total lines)\n"
+            f"```\n{content}\n```\n"
         )
 
-    return _cap_section("\n".join(parts))
+    if not parts:
+        return "*No readable tracker files found*\n"
+
+    return "\n".join(parts)
 
 
 def _collect_sfi_data(sim_dir: Path, files: dict[str, list[Path]]) -> str:
@@ -580,12 +561,5 @@ def collect_sim_data(sim_dir: Path) -> str:
     # Sanitize all sensitive paths and PII
     full_text = _sanitize(full_text, sim_dir)
 
-    # Apply overall context cap
-    if len(full_text) > _TOTAL_CONTEXT_CAP:
-        full_text = full_text[:_TOTAL_CONTEXT_CAP]
-        full_text += (
-            "\n\n*[Total context truncated at "
-            f"{_TOTAL_CONTEXT_CAP // 1000}KB limit]*\n"
-        )
-
+    # Context cap removed as per user request
     return full_text

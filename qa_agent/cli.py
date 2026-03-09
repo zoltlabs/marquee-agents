@@ -160,8 +160,10 @@ def main() -> None:
     )
     report_parser.add_argument(
         "sim_dir",
+        nargs="?",
+        default=None,
         metavar="SIM_DIR",
-        help="Simulation output directory (contains qrun.out/, logs/, etc.)",
+        help="Simulation output directory (contains qrun.out/, logs/, etc.). If omitted, runs on all debug_* subdirectories.",
     )
     report_parser.add_argument(
         "--provider", "-p",
