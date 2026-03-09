@@ -14,13 +14,13 @@ Generate a structured debug report from Questa/Visualizer simulation output. All
 Questa/Visualizer output directory
   (debug.log, mti.log, tracker_*.txt, sfi_*.txt, qrun.out/)
         │
-  [report_prefetch.py]   ── discovers + reads all files, filters, sanitizes
+  [report_prefetch.py]   ── discovers + reads all files, filters, sanitizes, smart windows
         │
   [agents/dv_debug_agent.py]  ── builds system + user prompt (sim data embedded)
         │
   [provider.stream()]    ── claude/openai/gemini streaming API
         │
-  [report.py]            ── orchestrator: CLI args → prefetch → AI → write report
+  [report.py]            ── orchestrator: CLI args → (batch discover) → prefetch → AI → write report + aggregate
 ```
 
 ### Data Flow
@@ -147,15 +147,12 @@ The entire context block is sanitized before being embedded in the prompt:
 | Machine hostname | `<HOST>` |
 | API key patterns (`sk-ant-`, `sk-...`, `AIza...`) | `<REDACTED>` |
 
-### Tracker Data Filtering
-Tracker files (`tracker_*.txt`) are **not passed in full**. Only lines matching these 5 failure categories are extracted:
-- ASSERT failures
-- SCOREBOARD mismatches
-- TIMEOUT events
-- FATAL errors
-- Transaction mismatches
-
-Files with no matching events are **silently skipped** — no noise.
+### Tracker Data Filtering (Smart Windowing)
+Tracker files (`tracker_*.txt`) are evaluated to extract failures while avoiding context limit overflows:
+- The prefetch searches for 5 failure categories: ASSERT failures, SCOREBOARD mismatches, TIMEOUT events, FATAL errors, and Transaction mismatches.
+- **Smart Sizing**: If extracting 500 lines of context per error exceeds 20,000 tracker lines total, the extract logic automatically falls back to 100 lines per error.
+- **Windowed Context**: The AI receives the top 50 lines (for configuration context), the N lines preceding the error (either 500 or 100), the error line itself, and the 20 lines succeeding the error. Non-relevant transaction stretches are skipped and replaced with a `... [Lines skipped] ...` marker to save tokens.
+- Files with no matching events are **silently skipped** — no noise.
 
 ### Output Size Caps
 - **32,000 characters** per section
@@ -217,19 +214,34 @@ Recommendations include: Visualizer waveform timestamps + signal names, specific
 ## CLI Interface
 
 ```
-qa-agent report SIM_DIR [--provider/-p {claude,openai,gemini}]
-                        [--output/-o PATH]
-                        [--verbose/-v]
-                        [--gvim]
+qa-agent report [SIM_DIR] [--provider/-p {claude,openai,gemini}]
+                          [--output/-o PATH]
+                          [--verbose/-v]
+                          [--gvim]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `SIM_DIR` | (required) | Questa/Visualizer output directory |
+| `SIM_DIR` | (optional) | Questa/Visualizer output directory. If omitted, runs in Batch Mode (iterates over all `debug_*` subdirectories, or the current directory if prefixed with `debug_`). |
 | `--provider/-p` | `claude` | AI provider: claude, openai, gemini |
-| `--output/-o` | `debug_report_<timestamp>.md` | Output Markdown path |
+| `--output/-o` | `debug_report_<timestamp>.md` | Output Markdown path (only used if a single directory is processed) |
 | `--verbose/-v` | off | Stream AI output to stdout while generating |
 | `--gvim` | off | Open assembled prompt in gvim for review before sending |
+
+## Report Generation Output
+
+When running `qa-agent report`, two levels of output are generated:
+
+### 1. Individual Directory Report
+Written inside the simulation directory (e.g., `debug_apcit_cpl_out_order_1234/QA-AGENT_REPORT_<timestamp>.md`).
+- Contains the exact AI Analysis (Executive Summary, Root Cause Analysis).
+- Contains the **Raw Simulation Data** and **Metadata** passed to the AI.
+- **Note:** The instructional prompt itself is stripped out to keep the report clean for end-users.
+
+### 2. Summary Aggregate Report
+Written in the parent directory (from where `qa-agent report` was called) as `QA-AGENT_REPORT_<timestamp>.md`.
+- Aggregates the `Executive Summary` and `Failure Classification` for every failing testcase directory discovered.
+- Contains direct links to the full individual reports.
 
 > `--max-turns` is accepted for CLI compatibility but unused in stream mode.
 

@@ -99,7 +99,7 @@ marquee-agents/
 | `init` | `[root]` `[--force/-f]` `[--use_defaults]` | Interactive wizard: discover project files and write qa-agent.yaml | [`IMPLEMENTATION/init_and_config.md`](./IMPLEMENTATION/init_and_config.md) |
 | `config` | — | Open qa-agent.yaml in your editor ($EDITOR, default: vim) | [`IMPLEMENTATION/init_and_config.md`](./IMPLEMENTATION/init_and_config.md) |
 | `summarise` | `[PATH …]` `--provider`/`-p {claude,openai,gemini}` | Summarise files or directories using AI | [`IMPLEMENTATION/summarise.md`](./IMPLEMENTATION/summarise.md) |
-| `report` | `SIM_DIR` `--provider`/`-p` `--output` `--gvim` | Generate an AI-driven debug report from sim output | [`IMPLEMENTATION/report.md`](./IMPLEMENTATION/report.md) |
+| `report` | `[SIM_DIR]` `--provider`/`-p` `--output` `--gvim` | Generate an AI-driven debug report from sim output (supports batch mode over multiple `debug_` directories if `SIM_DIR` omitted) | [`IMPLEMENTATION/report.md`](./IMPLEMENTATION/report.md) |
 | `doctor` | `--verbose`/`-v` | Check SDKs, auth, and log system | [`IMPLEMENTATION/doctor.md`](./IMPLEMENTATION/doctor.md) |
 | `analyse` | `[--mode basic\|slurm]` `[--working-dir PATH]` `[--output PATH]` `[--script/-s SCRIPT]` `[--test NAME]` `[--verbose/-v]` | Parse regression results, reconstruct configs, interact with sig_pcie workspace config, and write QA report | [`IMPLEMENTATION/analyse.md`](./IMPLEMENTATION/analyse.md) |
 | `regression` | `[source]` `[--slurm]` `[--verbose/-v]` | Check for sig_pcie source directory, locate scripts/filelist, source csh, execute regression, stream log | [`IMPLEMENTATION/regression.md`](./IMPLEMENTATION/regression.md) |
@@ -189,9 +189,10 @@ qa-agent summarise -p openai               # Use OpenAI (GPT-4o)
 qa-agent summarise -p gemini               # Use Google Gemini
 qa-agent --verbose summarise .             # Verbose output + full tracebacks
 qa-agent --debug summarise .              # Debug mode: verbose + session log written
-qa-agent report /path/to/sim/dir           # Generate an AI-driven debug report
+qa-agent report                            # Batch mode: generate reports for all debug_ subdirectories
+qa-agent report /path/to/sim/dir           # Generate an AI-driven debug report for a specific dir
 qa-agent report . -p openai                # Use OpenAI instead of Claude
-qa-agent report . --verbose                # Print all tool calls as the AI investigates (prompts for confirmation)
+qa-agent report . --verbose                # Print all stream text to stdout
 qa-agent report . --gvim                   # Open AI payload in gvim step by step
 qa-agent --version                         # Print version
 qa-agent --help                            # All commands

@@ -169,6 +169,10 @@ def run(
             )
             dump_file.write_text(dump_text, encoding="utf-8")
 
+            total_chars = len(request.system_prompt) + len(request.user_prompt)
+            estimated_tokens = total_chars // 4
+            total_lines = request.system_prompt.count("\n") + request.user_prompt.count("\n")
+
             try:
                 subprocess.run(
                     ["gvim", "-f", str(dump_file)],
@@ -181,7 +185,7 @@ def run(
             from qa_agent.output import arrow_select
             try:
                 ans = arrow_select(
-                    f"{bold('?')} Review complete. Send this prompt to the AI?",
+                    f"{bold('?')} Review complete. Prompt size: ~{total_lines:,} lines (~{estimated_tokens:,} tokens). Send this prompt to the AI?",
                     [("Proceed", "send to AI"), ("Stop", "abort and exit")],
                 )
                 if ans != 0:

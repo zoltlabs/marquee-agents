@@ -386,26 +386,94 @@ _TRACKER_FAILURE_RE = re.compile(
 
 
 def _collect_tracker_data(sim_dir: Path, files: dict[str, list[Path]]) -> str:
-    """Extract ALL contents from tracker_*.txt files (context cap removed)."""
+    """Extract failure events and surrounding context from tracker files.
+    
+    Uses smart sizing: if taking 500 lines before every error exceeds 20,000 lines 
+    total across all tracker files, it falls back to 100 lines before.
+    Always includes top 50 lines and 20 lines after the error.
+    """
     tracker_files = files.get("tracker", [])
     if not tracker_files:
         return "*No tracker files found*\n"
 
-    parts: list[str] = []
+    parsed_files = []
+    total_error_count = 0
 
+    # First pass: find all errors and count them
     for path in tracker_files:
         content = _safe_read(path, sim_dir)
         if content is None:
             continue
-
+            
         lines = content.splitlines()
+        error_indices = [
+            i for i, line in enumerate(lines) if _TRACKER_FAILURE_RE.search(line)
+        ]
+        
+        parsed_files.append({
+            "path": path,
+            "lines": lines,
+            "error_indices": error_indices
+        })
+        total_error_count += len(error_indices)
+
+    # Determine context size
+    # Total lines roughly = (top 50) + errors * (context_before + context_after)
+    # Target < 20000 lines total for tracker context
+    if total_error_count * 500 > 20000:
+        context_before = 100
+    else:
+        context_before = 500
+        
+    context_after = 20
+    parts: list[str] = []
+
+    for file_data in parsed_files:
+        path = file_data["path"]
+        lines = file_data["lines"]
+        error_indices = file_data["error_indices"]
+        
+        if not error_indices:
+            continue # Skip files without errors to save space
+            
+        file_parts = []
+        
+        # Always include top 50 lines for config/setup context
+        top_lines = lines[:50]
+        file_parts.extend(top_lines)
+        if len(lines) > 50 and error_indices[0] > 50:
+            file_parts.append("\n... [Lines skipped] ...\n")
+            
+        covered = set(range(50))
+        
+        for idx in error_indices:
+            start = max(0, idx - context_before)
+            end = min(len(lines), idx + context_after + 1)
+            
+            # Add gap marker if not contiguous
+            if start > 0 and (start - 1) not in covered and len(file_parts) > 0 and file_parts[-1] != "\n... [Lines skipped] ...\n":
+                file_parts.append("\n... [Lines skipped] ...\n")
+                
+            for j in range(start, end):
+                if j not in covered:
+                    # Highlight the actual error line
+                    if j in error_indices:
+                        file_parts.append(f">>> {lines[j]}")
+                    else:
+                        file_parts.append(lines[j])
+                    covered.add(j)
+                    
         parts.append(
-            f"### {path.name} ({len(lines)} total lines)\n"
-            f"```\n{content}\n```\n"
+            f"### {path.name} ({len(error_indices)} errors found, showing {context_before} lines before each)\n"
+            f"```\n{chr(10).join(file_parts)}\n```\n"
         )
 
     if not parts:
-        return "*No readable tracker files found*\n"
+        return (
+            "*No tracker failure events found across "
+            f"{len(tracker_files)} tracker file(s). "
+            "No ASSERT / SCOREBOARD / TIMEOUT / FATAL / transaction mismatch entries.*\n"
+        )
 
     return "\n".join(parts)
 
