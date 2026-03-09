@@ -2,10 +2,9 @@
 
 Pre-fetches all simulation data for the AI debug report.
 
-Reads simulation output files directly (compile.log, sim.log, tracker, etc.)
-with security validation (path containment, output caps, path sanitization).
-Results are assembled into a single Markdown context block embedded in the
-AI prompt.
+Discovers and reads actual Questa/Visualizer output files from the simulation
+directory — debug.log, mti.log, tracker_*.txt, sfi_*.txt, coverage reports,
+and qrun.out/ metadata.
 
 Security:
   - All file access validated via tools/report/security.validate_path()
@@ -23,7 +22,6 @@ import os
 import re
 from pathlib import Path
 
-from qa_agent.tools.report import build_report_tools
 from qa_agent.tools.report.security import validate_path, truncate_output
 
 
@@ -31,14 +29,20 @@ from qa_agent.tools.report.security import validate_path, truncate_output
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Per-section character cap — generous for one-shot prompt (not agentic loop)
+# Per-section character cap
 _SECTION_CAP = 32_000
 
 # Overall context cap — prevents exceeding model context window
 _TOTAL_CONTEXT_CAP = 150_000
 
-# Max bytes to read from a single log file
+# Max bytes to read from a single file
 _MAX_FILE_BYTES = 2_000_000
+
+# Readable text extensions (skip binaries)
+_TEXT_EXTENSIONS = {".txt", ".log", ".doc", ".f", ".sv", ".v", ".vh", ".cmd"}
+
+# Files/dirs to skip entirely
+_SKIP_NAMES = {"work", "design.bin", "qwave.db", "qrun.out", "sessions", "snapshot"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -81,19 +85,6 @@ def _sanitize(text: str, sim_dir: Path) -> str:
 # File reading helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _find_file(sim_dir: Path, name: str) -> Path | None:
-    """Locate a file in sim_dir, sim_dir/logs/, or sim_dir/qrun.out/."""
-    for parent in [sim_dir, sim_dir / "logs", sim_dir / "qrun.out"]:
-        candidate = parent / name
-        try:
-            validated = validate_path(str(candidate.relative_to(sim_dir)), sim_dir)
-            if validated.exists():
-                return validated
-        except Exception:
-            continue
-    return None
-
-
 def _safe_read(path: Path, sim_dir: Path, max_bytes: int = _MAX_FILE_BYTES) -> str | None:
     """Read a file within sim_dir. Returns None if not found or inaccessible."""
     try:
@@ -101,7 +92,7 @@ def _safe_read(path: Path, sim_dir: Path, max_bytes: int = _MAX_FILE_BYTES) -> s
     except Exception:
         return None
 
-    if not path.exists():
+    if not path.exists() or not path.is_file():
         return None
 
     try:
@@ -119,25 +110,65 @@ def _cap_section(text: str, limit: int = _SECTION_CAP) -> str:
     return text
 
 
+def _discover_files(sim_dir: Path) -> dict[str, list[Path]]:
+    """Discover and categorise readable files in the simulation directory.
+
+    Returns a dict with categories:
+      - 'debug_logs': debug.log and similar main simulation logs
+      - 'mti_logs': mti.log, mti.cmd
+      - 'tracker': tracker_*.txt files
+      - 'sfi': sfi_*.txt files
+      - 'coverage': *coverage*.txt files
+      - 'other_logs': any other .log or .txt files
+    """
+    categories: dict[str, list[Path]] = {
+        "debug_logs": [],
+        "mti_logs": [],
+        "tracker": [],
+        "sfi": [],
+        "coverage": [],
+        "other_logs": [],
+    }
+
+    try:
+        entries = sorted(sim_dir.iterdir())
+    except PermissionError:
+        return categories
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        name = entry.name.lower()
+
+        # Skip known binary/unreadable files
+        if name in _SKIP_NAMES:
+            continue
+
+        # Check extension
+        suffix = entry.suffix.lower()
+        if suffix not in _TEXT_EXTENSIONS and entry.suffix:
+            continue
+
+        # Categorise
+        if name == "debug.log":
+            categories["debug_logs"].append(entry)
+        elif name.startswith("mti."):
+            categories["mti_logs"].append(entry)
+        elif name.startswith("tracker_"):
+            categories["tracker"].append(entry)
+        elif name.startswith("sfi_"):
+            categories["sfi"].append(entry)
+        elif "coverage" in name:
+            categories["coverage"].append(entry)
+        elif suffix in {".log", ".txt"}:
+            categories["other_logs"].append(entry)
+
+    return categories
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Section collectors
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _collect_file_listing(sim_dir: Path) -> str:
-    """List files in sim_dir top level, qrun.out/, and logs/."""
-    registry = build_report_tools(sim_dir, max_output_chars=_SECTION_CAP)
-    parts: list[str] = []
-
-    for label, kwargs in [
-        ("Top level", {}),
-        ("qrun.out/", {"subdir": "qrun.out"}),
-        ("logs/", {"subdir": "logs"}),
-    ]:
-        result = registry.execute(f"prefetch_{label}", "list_sim_files", kwargs)
-        parts.append(f"### {label}\n```json\n{result.content.strip()}\n```\n")
-
-    return "\n".join(parts)
-
 
 def _collect_test_config(sim_dir: Path) -> str:
     """Read test configuration from qrun.out/ metadata files."""
@@ -154,94 +185,26 @@ def _collect_test_config(sim_dir: Path) -> str:
     return "\n".join(parts)
 
 
-def _collect_compile_log(sim_dir: Path) -> str:
-    """Analyse compile.log — full error blocks if errors, else brief summary."""
-    path = _find_file(sim_dir, "compile.log")
-    if path is None:
-        return "*compile.log not found*\n"
+def _extract_errors_from_log(content: str, log_name: str) -> str:
+    """Extract all error/warning/fatal blocks from a log file with context.
 
-    content = _safe_read(path, sim_dir)
-    if content is None:
-        return "*Could not read compile.log*\n"
-
-    lines = content.splitlines()
-
-    # Detect compilation errors
-    error_re = re.compile(
-        r"(?i)\*\*\s*(error|fatal)"
-        r"|compilation\s+failed"
-        r"|fatal\s+error"
-        r"|syntax\s+error"
-    )
-
-    has_errors = any(error_re.search(line) for line in lines)
-
-    if not has_errors:
-        # Clean compile — show last 30 lines (summary)
-        tail_n = min(30, len(lines))
-        tail = lines[-tail_n:]
-        return (
-            f"*Compilation clean ({len(lines)} lines total, no errors)*\n\n"
-            f"**Compile Log Tail (last {tail_n} lines):**\n"
-            f"```\n{chr(10).join(tail)}\n```\n"
-        )
-
-    # Has errors — extract error blocks with generous context (8 lines before, 5 after)
-    error_blocks: list[str] = []
-    covered: set[int] = set()
-
-    for i, line in enumerate(lines):
-        if error_re.search(line) and i not in covered:
-            start = max(0, i - 8)
-            end = min(len(lines), i + 6)
-            for j in range(start, end):
-                covered.add(j)
-            block_lines = lines[start:end]
-            error_blocks.append(f"[Line {i + 1}]\n" + "\n".join(block_lines))
-
-    # Also include the last 20 lines (compilation summary)
-    tail = lines[-20:] if len(lines) > 20 else lines
-
-    result = (
-        f"**Compilation FAILED** ({len(lines)} lines total, "
-        f"{len(error_blocks)} error block(s) found)\n\n"
-        "### Error Blocks\n```\n"
-        + "\n\n---\n".join(error_blocks)
-        + "\n```\n\n### Compile Log Tail\n```\n"
-        + "\n".join(tail)
-        + "\n```\n"
-    )
-
-    return _cap_section(result)
-
-
-def _collect_sim_errors(sim_dir: Path) -> str:
-    """Extract ALL error/warning/fatal lines from sim.log with context.
-
-    Unlike the tool handler (which caps at 50 matches with 3 context lines),
-    this collects comprehensively for the one-shot AI analysis.
+    Returns a formatted string with error blocks and surrounding context lines.
     """
-    path = _find_file(sim_dir, "sim.log")
-    if path is None:
-        return "*sim.log not found*\n"
-
-    content = _safe_read(path, sim_dir)
-    if content is None:
-        return "*Could not read sim.log*\n"
-
     lines = content.splitlines()
 
-    # Error patterns (higher priority)
+    # Error patterns (high priority)
     error_re = re.compile(
         r"(?i)(\*\*\s*(error|fatal)"
         r"|UVM_(ERROR|FATAL)"
         r"|assertion\s+(fail|error)"
         r"|scoreboard.*mismatch"
         r"|FAILED"
-        r"|timeout.*(?:abort|fatal|limit))"
+        r"|timeout.*(?:abort|fatal|limit)"
+        r"|\bfatal\b"
+        r"|Error:)"
     )
-    # Warning patterns (tracked separately)
-    warning_re = re.compile(r"(?i)(\*\*\s*warning|UVM_WARNING)")
+    # Warning patterns
+    warning_re = re.compile(r"(?i)(\*\*\s*warning|UVM_WARNING|Warning:)")
 
     error_blocks: list[str] = []
     warning_count = 0
@@ -263,12 +226,12 @@ def _collect_sim_errors(sim_dir: Path) -> str:
 
     if not error_blocks:
         return (
-            f"*No errors found in sim.log "
+            f"*No errors found in {log_name} "
             f"({len(lines)} lines, {warning_count} warning(s))*\n"
         )
 
     result = (
-        f"**{len(error_blocks)} error block(s) found** "
+        f"**{len(error_blocks)} error block(s) found in {log_name}** "
         f"({len(lines)} total lines, {warning_count} warning(s))\n\n```\n"
         + "\n\n---\n".join(error_blocks)
         + "\n```\n"
@@ -277,36 +240,52 @@ def _collect_sim_errors(sim_dir: Path) -> str:
     return _cap_section(result)
 
 
-def _collect_uvm_summary(sim_dir: Path) -> str:
-    """Extract the UVM Report Summary table from the end of sim.log.
+def _collect_debug_log(sim_dir: Path, files: dict[str, list[Path]]) -> str:
+    """Collect errors and tail from debug.log — the main simulation log."""
+    debug_logs = files.get("debug_logs", [])
+    if not debug_logs:
+        return "*debug.log not found*\n"
 
-    The UVM summary typically appears near the end and contains error/warning
-    counts per component — critical for understanding failure scope.
-    """
-    path = _find_file(sim_dir, "sim.log")
-    if path is None:
-        return "*sim.log not found*\n"
-
+    path = debug_logs[0]
     content = _safe_read(path, sim_dir)
     if content is None:
-        return "*Could not read sim.log*\n"
+        return "*Could not read debug.log*\n"
 
+    parts: list[str] = []
+
+    # Extract errors with context
+    errors_section = _extract_errors_from_log(content, "debug.log")
+    parts.append("### Errors & Failures\n" + errors_section)
+
+    # UVM Report Summary (search from end)
     lines = content.splitlines()
+    uvm_summary = _extract_uvm_summary(lines)
+    if uvm_summary:
+        parts.append("### UVM Report Summary\n" + uvm_summary)
 
-    # Search backwards from end for UVM summary markers
+    # Last 150 lines — contains test verdict, phase info, exit status
+    tail_n = min(150, len(lines))
+    tail = lines[-tail_n:]
+    parts.append(
+        f"### Log Tail (last {tail_n} of {len(lines)} lines)\n"
+        f"```\n{chr(10).join(tail)}\n```\n"
+    )
+
+    return _cap_section("\n".join(parts))
+
+
+def _extract_uvm_summary(lines: list[str]) -> str:
+    """Extract UVM Report Summary table from log lines (searched from end)."""
     summary_patterns = [
         re.compile(r"(?i)[-=]+\s*UVM\s+Report\s+Summary\s*[-=]+"),
         re.compile(r"(?i)UVM\s+Report\s+Summary"),
         re.compile(r"(?i)[-=]+\s*Report\s+Summary\s*[-=]+"),
     ]
-
-    # Also look for the count table lines: "UVM_INFO : 42"
     count_re = re.compile(r"(?i)^\s*UVM_(INFO|WARNING|ERROR|FATAL)\s*[:/]\s*\d+")
 
+    # Search backwards from end
     summary_start = None
-    search_range = range(len(lines) - 1, max(0, len(lines) - 500) - 1, -1)
-
-    for i in search_range:
+    for i in range(len(lines) - 1, max(0, len(lines) - 500) - 1, -1):
         for pat in summary_patterns:
             if pat.search(lines[i]):
                 summary_start = i
@@ -315,97 +294,174 @@ def _collect_uvm_summary(sim_dir: Path) -> str:
             break
 
     if summary_start is not None:
-        # Grab from summary header to end of file (or at most 80 lines)
         end = min(summary_start + 80, len(lines))
         summary_lines = lines[summary_start:end]
         return f"```\n{chr(10).join(summary_lines)}\n```\n"
 
-    # Fallback: look for count table lines without a header
-    count_lines: list[str] = []
-    for i in range(max(0, len(lines) - 100), len(lines)):
-        if count_re.search(lines[i]):
-            count_lines.append(lines[i])
-
+    # Fallback: count table lines without header
+    count_lines = [
+        lines[i] for i in range(max(0, len(lines) - 100), len(lines))
+        if count_re.search(lines[i])
+    ]
     if count_lines:
         return (
-            "*No formal UVM Report Summary header found, but count lines detected:*\n\n"
+            "*No formal UVM Report Summary header, but count lines found:*\n\n"
             f"```\n{chr(10).join(count_lines)}\n```\n"
         )
 
-    return "*No UVM Report Summary found in sim.log*\n"
+    return ""
 
 
-def _collect_sim_tail(sim_dir: Path) -> str:
-    """Get the last 150 lines of sim.log — test verdict, phase info, exit status."""
-    path = _find_file(sim_dir, "sim.log")
-    if path is None:
-        return "*sim.log not found*\n"
+def _collect_mti_log(sim_dir: Path, files: dict[str, list[Path]]) -> str:
+    """Collect errors from mti.log — Questa/MTI diagnostic log."""
+    mti_logs = files.get("mti_logs", [])
+    if not mti_logs:
+        return "*mti.log not found*\n"
 
-    content = _safe_read(path, sim_dir)
+    parts: list[str] = []
+    for path in mti_logs:
+        content = _safe_read(path, sim_dir)
+        if content is None:
+            parts.append(f"*Could not read {path.name}*\n")
+            continue
+        parts.append(
+            f"### {path.name}\n"
+            + _extract_errors_from_log(content, path.name)
+        )
+
+    return "\n".join(parts)
+
+
+def _collect_tracker_data(sim_dir: Path, files: dict[str, list[Path]]) -> str:
+    """Read all tracker_*.txt files — per-component event tracking."""
+    tracker_files = files.get("tracker", [])
+    if not tracker_files:
+        return "*No tracker files found*\n"
+
+    parts: list[str] = []
+    # Failure/error pattern for tracker entries
+    failure_re = re.compile(r"(?i)(fail|error|mismatch|assert|fatal|timeout)")
+
+    for path in tracker_files:
+        content = _safe_read(path, sim_dir)
+        if content is None:
+            continue
+
+        lines = content.splitlines()
+
+        # Extract failure-related entries
+        failure_lines = [
+            line for line in lines if failure_re.search(line)
+        ]
+
+        if failure_lines:
+            parts.append(
+                f"### {path.name} ({len(failure_lines)} failure entries "
+                f"out of {len(lines)} total)\n"
+                f"```\n{chr(10).join(failure_lines[:100])}\n```\n"
+            )
+        else:
+            # Show summary: first and last few lines to give context
+            summary_lines = lines[:5]
+            if len(lines) > 10:
+                summary_lines.append(f"... ({len(lines) - 10} lines omitted) ...")
+                summary_lines.extend(lines[-5:])
+            elif len(lines) > 5:
+                summary_lines.extend(lines[5:])
+
+            parts.append(
+                f"### {path.name} ({len(lines)} lines, no failures)\n"
+                f"```\n{chr(10).join(summary_lines)}\n```\n"
+            )
+
+    if not parts:
+        return "*No readable tracker files*\n"
+
+    return _cap_section("\n".join(parts))
+
+
+def _collect_sfi_data(sim_dir: Path, files: dict[str, list[Path]]) -> str:
+    """Read SFI (Scalable Fabric Interface) data files."""
+    sfi_files = files.get("sfi", [])
+    if not sfi_files:
+        return "*No SFI data files found*\n"
+
+    parts: list[str] = []
+
+    for path in sfi_files:
+        content = _safe_read(path, sim_dir, max_bytes=16_000)
+        if content is None:
+            continue
+
+        lines = content.splitlines()
+        # For SFI data, show first 50 lines + error lines
+        display_lines = lines[:50]
+        if len(lines) > 50:
+            display_lines.append(f"... ({len(lines) - 50} more lines) ...")
+
+        parts.append(
+            f"### {path.name} ({len(lines)} lines)\n"
+            f"```\n{chr(10).join(display_lines)}\n```\n"
+        )
+
+    if not parts:
+        return "*No readable SFI files*\n"
+
+    return _cap_section("\n".join(parts))
+
+
+def _collect_coverage(sim_dir: Path, files: dict[str, list[Path]]) -> str:
+    """Read coverage report files."""
+    coverage_files = files.get("coverage", [])
+    if not coverage_files:
+        return "*No coverage report found*\n"
+
+    parts: list[str] = []
+
+    for path in coverage_files:
+        content = _safe_read(path, sim_dir, max_bytes=32_000)
+        if content is None:
+            continue
+
+        lines = content.splitlines()
+        parts.append(
+            f"### {path.name} ({len(lines)} lines)\n"
+            f"```\n{chr(10).join(lines)}\n```\n"
+        )
+
+    if not parts:
+        return "*No readable coverage files*\n"
+
+    return _cap_section("\n".join(parts))
+
+
+def _collect_stats_summary(sim_dir: Path) -> str:
+    """Parse stats_log for a quick error/warning count summary per tool."""
+    stats_path = sim_dir / "qrun.out" / "stats_log"
+    content = _safe_read(stats_path, sim_dir, max_bytes=4_000)
     if content is None:
-        return "*Could not read sim.log*\n"
+        return "*stats_log not found*\n"
 
-    lines = content.splitlines()
-    tail_n = min(150, len(lines))
-    tail = lines[-tail_n:]
-
-    return (
-        f"*Last {tail_n} of {len(lines)} lines:*\n\n"
-        f"```\n{chr(10).join(tail)}\n```\n"
+    # Parse lines like "vlog: Errors: 0, Warnings: 4"
+    lines = content.strip().splitlines()
+    has_errors = any(
+        re.search(r"Errors:\s*[1-9]", line) for line in lines
     )
 
-
-def _collect_assertions(sim_dir: Path) -> str:
-    """Extract structured assertion failures via the existing tool handler."""
-    registry = build_report_tools(sim_dir, max_output_chars=_SECTION_CAP)
-    result = registry.execute("prefetch_assertions", "get_assertion_failures", {})
-    if result.error:
-        return f"*Error: {result.content}*\n"
-    return f"```json\n{result.content.strip()}\n```\n"
-
-
-def _collect_scoreboard(sim_dir: Path) -> str:
-    """Extract structured scoreboard mismatches via the existing tool handler."""
-    registry = build_report_tools(sim_dir, max_output_chars=_SECTION_CAP)
-    result = registry.execute("prefetch_scoreboard", "get_scoreboard_mismatches", {})
-    if result.error:
-        return f"*Error: {result.content}*\n"
-    return f"```json\n{result.content.strip()}\n```\n"
-
-
-def _collect_tracker(sim_dir: Path) -> str:
-    """Extract tracker failure events via the existing tool handler."""
-    registry = build_report_tools(sim_dir, max_output_chars=_SECTION_CAP)
-    result = registry.execute("prefetch_tracker", "extract_tracker_failures", {})
-    if result.error:
-        return f"*Error: {result.content}*\n"
-    return f"```json\n{result.content.strip()}\n```\n"
+    status = "**ERRORS DETECTED**" if has_errors else "*All stages clean*"
+    return f"{status}\n\n```\n{content.strip()}\n```\n"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Sections ordered by debugging priority
-_SECTIONS: list[tuple[str, object]] = [
-    ("Available Simulation Files", _collect_file_listing),
-    ("Test Configuration & Metadata", _collect_test_config),
-    ("Compile Log Analysis", _collect_compile_log),
-    ("Simulation Errors & Failures", _collect_sim_errors),
-    ("UVM Report Summary", _collect_uvm_summary),
-    ("Simulation Log — Final Output", _collect_sim_tail),
-    ("Assertion Failures (Structured)", _collect_assertions),
-    ("Scoreboard Mismatches (Structured)", _collect_scoreboard),
-    ("Tracker Events (Failure-Related)", _collect_tracker),
-]
-
-
 def collect_sim_data(sim_dir: Path) -> str:
     """Run all collectors against *sim_dir* and return a Markdown context block.
 
-    Each collector reads simulation output files with security validation
-    (path containment via validate_path(), output caps, PII sanitization).
-    Results are assembled in debugging priority order.
+    Discovers actual files in the Questa/Visualizer output directory (debug.log,
+    mti.log, tracker_*.txt, sfi_*.txt, coverage reports, qrun.out/ metadata)
+    and reads them with security validation.
 
     Args:
         sim_dir: Resolved Path to the simulation output directory.
@@ -414,26 +470,68 @@ def collect_sim_data(sim_dir: Path) -> str:
         A Markdown-formatted string with all collected sim data embedded, ready
         to drop into an AI prompt.
     """
+    # Discover what files actually exist
+    files = _discover_files(sim_dir)
+
     parts: list[str] = [
         "# Simulation Data\n",
     ]
 
-    for title, collector in _SECTIONS:
-        parts.append(f"\n## {title}\n")
-        try:
-            section = collector(sim_dir)
-            parts.append(section)
-        except Exception as exc:
-            parts.append(
-                f"*Error collecting {title}: {type(exc).__name__}: {exc}*\n"
-            )
+    # Section 1: Quick error summary from stats_log
+    parts.append("\n## Build & Simulation Status\n")
+    try:
+        parts.append(_collect_stats_summary(sim_dir))
+    except Exception as exc:
+        parts.append(f"*Error: {type(exc).__name__}: {exc}*\n")
+
+    # Section 2: Test configuration and metadata
+    parts.append("\n## Test Configuration & Metadata\n")
+    try:
+        parts.append(_collect_test_config(sim_dir))
+    except Exception as exc:
+        parts.append(f"*Error: {type(exc).__name__}: {exc}*\n")
+
+    # Section 3: Main simulation log (debug.log) — errors, UVM summary, tail
+    parts.append("\n## Simulation Log (debug.log)\n")
+    try:
+        parts.append(_collect_debug_log(sim_dir, files))
+    except Exception as exc:
+        parts.append(f"*Error: {type(exc).__name__}: {exc}*\n")
+
+    # Section 4: MTI/Questa diagnostics (mti.log)
+    parts.append("\n## Questa Diagnostics (mti.log)\n")
+    try:
+        parts.append(_collect_mti_log(sim_dir, files))
+    except Exception as exc:
+        parts.append(f"*Error: {type(exc).__name__}: {exc}*\n")
+
+    # Section 5: Tracker data (per-component)
+    parts.append("\n## Tracker Data (Per-Component Events)\n")
+    try:
+        parts.append(_collect_tracker_data(sim_dir, files))
+    except Exception as exc:
+        parts.append(f"*Error: {type(exc).__name__}: {exc}*\n")
+
+    # Section 6: SFI interface data
+    parts.append("\n## SFI Interface Data\n")
+    try:
+        parts.append(_collect_sfi_data(sim_dir, files))
+    except Exception as exc:
+        parts.append(f"*Error: {type(exc).__name__}: {exc}*\n")
+
+    # Section 7: Coverage report
+    parts.append("\n## Coverage Report\n")
+    try:
+        parts.append(_collect_coverage(sim_dir, files))
+    except Exception as exc:
+        parts.append(f"*Error: {type(exc).__name__}: {exc}*\n")
 
     full_text = "\n".join(parts)
 
     # Sanitize all sensitive paths and PII
     full_text = _sanitize(full_text, sim_dir)
 
-    # Apply overall context cap — truncate less-critical trailing sections first
+    # Apply overall context cap
     if len(full_text) > _TOTAL_CONTEXT_CAP:
         full_text = full_text[:_TOTAL_CONTEXT_CAP]
         full_text += (
