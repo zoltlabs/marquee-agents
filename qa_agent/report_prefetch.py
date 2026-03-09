@@ -170,11 +170,49 @@ def _discover_files(sim_dir: Path) -> dict[str, list[Path]]:
 # Section collectors
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _read_big_argv(sim_dir: Path) -> str | None:
+    """Read the vlog filelist from qrun.out/big_argv/.
+
+    big_argv is a directory containing a single .f file (e.g.
+    vlog_work_b402oC34PUd0F1NA1.f) with the full vlog command line.
+    Falls back to reading big_argv as a plain file if the directory
+    form is not found.
+    """
+    big_argv_path = sim_dir / "qrun.out" / "big_argv"
+
+    # New form: big_argv is a directory containing a .f file
+    if big_argv_path.is_dir():
+        try:
+            f_files = sorted(big_argv_path.glob("*.f"))
+            if f_files:
+                f_file = f_files[0]
+                try:
+                    validate_path(
+                        str(f_file.relative_to(sim_dir)), sim_dir
+                    )
+                except Exception:
+                    return None
+                return _safe_read(f_file, sim_dir, max_bytes=8_000)
+        except Exception:
+            return None
+        return None
+
+    # Legacy form: big_argv is a plain file
+    return _safe_read(big_argv_path, sim_dir, max_bytes=8_000)
+
+
 def _collect_test_config(sim_dir: Path) -> str:
     """Read test configuration from qrun.out/ metadata files."""
     parts: list[str] = []
 
-    for name in ["big_argv", "version", "stats_log", "top_dus"]:
+    # big_argv — may be a directory (new Questa form) or a plain file
+    big_argv = _read_big_argv(sim_dir)
+    if big_argv:
+        parts.append(f"### big_argv\n```\n{big_argv.strip()}\n```\n")
+    else:
+        parts.append("### big_argv\n*Not found*\n")
+
+    for name in ["version", "stats_log", "top_dus"]:
         meta_path = sim_dir / "qrun.out" / name
         content = _safe_read(meta_path, sim_dir, max_bytes=8_000)
         if content:
@@ -332,15 +370,36 @@ def _collect_mti_log(sim_dir: Path, files: dict[str, list[Path]]) -> str:
     return "\n".join(parts)
 
 
+# Pattern matching only the 5 failure categories of interest in tracker files.
+# Matches: ASSERT failures, SCOREBOARD mismatches, TIMEOUT events,
+# FATAL errors, and transaction mismatches.
+_TRACKER_FAILURE_RE = re.compile(
+    r"(?i)"
+    r"(assert.*fail|fail.*assert"          # ASSERT failures
+    r"|scoreboard.*mismatch|mismatch.*scoreboard"  # SCOREBOARD mismatches
+    r"|timeout"                            # TIMEOUT events
+    r"|\bfatal\b"                          # FATAL errors
+    r"|transaction.*mismatch|mismatch.*transaction"  # Transaction mismatches
+    r"|ASSERT|SCOREBOARD_ERR|SB_ERR"      # Common tracker tags
+    r")"
+)
+
+
 def _collect_tracker_data(sim_dir: Path, files: dict[str, list[Path]]) -> str:
-    """Read all tracker_*.txt files — per-component event tracking."""
+    """Extract failure events from tracker_*.txt files.
+
+    Only collects:
+      - ASSERT failures
+      - SCOREBOARD mismatches
+      - TIMEOUT events
+      - FATAL errors
+      - Transaction mismatches
+    """
     tracker_files = files.get("tracker", [])
     if not tracker_files:
         return "*No tracker files found*\n"
 
     parts: list[str] = []
-    # Failure/error pattern for tracker entries
-    failure_re = re.compile(r"(?i)(fail|error|mismatch|assert|fatal|timeout)")
 
     for path in tracker_files:
         content = _safe_read(path, sim_dir)
@@ -348,34 +407,24 @@ def _collect_tracker_data(sim_dir: Path, files: dict[str, list[Path]]) -> str:
             continue
 
         lines = content.splitlines()
-
-        # Extract failure-related entries
         failure_lines = [
-            line for line in lines if failure_re.search(line)
+            line for line in lines if _TRACKER_FAILURE_RE.search(line)
         ]
 
         if failure_lines:
             parts.append(
-                f"### {path.name} ({len(failure_lines)} failure entries "
-                f"out of {len(lines)} total)\n"
-                f"```\n{chr(10).join(failure_lines[:100])}\n```\n"
+                f"### {path.name} — {len(failure_lines)} failure event(s) "
+                f"(of {len(lines)} total lines)\n"
+                f"```\n{chr(10).join(failure_lines[:200])}\n```\n"
             )
-        else:
-            # Show summary: first and last few lines to give context
-            summary_lines = lines[:5]
-            if len(lines) > 10:
-                summary_lines.append(f"... ({len(lines) - 10} lines omitted) ...")
-                summary_lines.extend(lines[-5:])
-            elif len(lines) > 5:
-                summary_lines.extend(lines[5:])
-
-            parts.append(
-                f"### {path.name} ({len(lines)} lines, no failures)\n"
-                f"```\n{chr(10).join(summary_lines)}\n```\n"
-            )
+        # Skip files with no matching failures entirely — no noise
 
     if not parts:
-        return "*No readable tracker files*\n"
+        return (
+            "*No tracker failure events found across "
+            f"{len(tracker_files)} tracker file(s). "
+            "No ASSERT / SCOREBOARD / TIMEOUT / FATAL / transaction mismatch entries.*\n"
+        )
 
     return _cap_section("\n".join(parts))
 
