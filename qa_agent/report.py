@@ -416,7 +416,7 @@ def _run_stream(
 
     Returns the report text, or None on failure.
     """
-    console.print(f"  [dim]Collecting simulation data…[/dim]", end="", flush=True)
+    console.print(f"  [dim]Collecting simulation data…[/dim]", end="")
     try:
         from qa_agent.report_prefetch import collect_sim_data
         sim_data = collect_sim_data(sim_path)
