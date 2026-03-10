@@ -45,19 +45,79 @@ def _load_dotenv() -> None:
         pass
 
 
+# Field names Claude Code CLI may store the OAuth token under in ~/.claude.json
+_CLAUDE_JSON_TOKEN_FIELDS = (
+    "oauthToken",      # current Claude Code CLI (v1.x)
+    "accessToken",     # older builds
+    "sessionToken",    # possible alias
+    "primaryApiKey",   # possible alias in some builds
+    "apiKey",          # fallback
+)
+
+
+def _read_claude_json_token() -> str:
+    """Read the OAuth access token from ~/.claude.json.
+
+    Tries both ``os.path.expanduser('~/.claude.json')`` and
+    ``/home/$USER/.claude.json`` so that the code works correctly on
+    servers using csh/tcsh where $HOME may differ from /home/$USER.
+
+    Returns the token string, or "" if not found / not parseable.
+    """
+    import json as _json
+
+    candidates = [
+        os.path.expanduser("~/.claude.json"),
+    ]
+    # csh / tcsh servers: $HOME can be /home/$USER but expanduser uses /root etc.
+    env_user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    if env_user:
+        candidates.append(f"/home/{env_user}/.claude.json")
+
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = _json.load(fh)
+        except (OSError, ValueError):
+            continue
+
+        # Try known field names in order
+        for field in _CLAUDE_JSON_TOKEN_FIELDS:
+            token = data.get(field, "")
+            if isinstance(token, str) and token.strip():
+                return token.strip()
+
+        # Also check one level inside nested dicts (some versions nest under "auth")
+        for nested_key in ("auth", "session", "credentials"):
+            nested = data.get(nested_key)
+            if isinstance(nested, dict):
+                for field in _CLAUDE_JSON_TOKEN_FIELDS:
+                    token = nested.get(field, "")
+                    if isinstance(token, str) and token.strip():
+                        return token.strip()
+
+    return ""
+
+
 def _resolve_auth() -> dict[str, str]:
-    """Return an env-override dict for ClaudeAgentOptions.
+    """Return an env-override dict for ClaudeAgentOptions (SDK stream path).
 
     Priority:
       1. ANTHROPIC_API_KEY in environment (or .env in cwd)
-      2. Claude Code CLI OAuth session  (`claude login`)
-      3. Raise RuntimeError with setup instructions
+      2. OAuth token from ~/.claude.json  (Claude Code CLI — ``claude login``)
+      3. Claude Code CLI binary present (SDK manages OAuth transparently)
+      4. Raise ProviderAuthError with setup instructions
     """
     _load_dotenv()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if api_key:
         return {"ANTHROPIC_API_KEY": api_key}
+
+    # Try ~/.claude.json OAuth token
+    token = _read_claude_json_token()
+    if token:
+        return {"ANTHROPIC_API_KEY": token}
 
     if shutil.which("claude") is not None:
         # OAuth session is managed by the CLI; no key override needed.
@@ -67,9 +127,12 @@ def _resolve_auth() -> dict[str, str]:
         "Authentication failed.\n\n"
         "  Option 1 — API key:\n"
         "    export ANTHROPIC_API_KEY=sk-ant-...\n\n"
-        "  Option 2 — Claude Code CLI OAuth:\n"
+        "  Option 2 — Claude Code CLI OAuth (auto-detected):\n"
         "    npm install -g @anthropic-ai/claude-code\n"
-        "    claude login"
+        "    claude login\n\n"
+        "  Option 3 — Manual token:\n"
+        "    The OAuth token is read automatically from ~/.claude.json\n"
+        "    after running 'claude login'."
     )
 
 def _get_sandbox_dir() -> str:
