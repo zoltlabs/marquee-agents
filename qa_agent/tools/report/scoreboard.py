@@ -2,138 +2,176 @@
 
 Tool: get_scoreboard_mismatches
 
-Extracts scoreboard mismatch summaries from simulation logs.
-Returns aggregated stats — not raw comparison data.
+Extracts scoreboard mismatch entries from debug.log.
+Only debug.log is accessible — never source RTL or design files.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
 from qa_agent.tools.report.security import validate_path
 
-# Common scoreboard mismatch patterns
-_MISMATCH_LINE_RE = re.compile(
-    r"(?i)(?:scoreboard|sb).*?mismatch"
-    r"|(?:expected|actual|got)[\s:]+(?P<val>[0-9a-fx]+)"
+_MISMATCH_RE = re.compile(
+    r"(?i)(?:scoreboard|SB|checker).*?mismatch"
+    r"|(?:expected|actual|got)[\s:]+(?P<val>[0-9a-fx_']+)"
     r"|UVM_ERROR.*?mismatch",
-    re.IGNORECASE,
 )
-
-_COMPONENT_RE = re.compile(
-    r"(?i)(?:component|checker|monitor|sb)[\s:_]+(?P<name>\w+)",
-)
-
 _VALUE_RE = re.compile(
-    r"(?i)expected[\s:=]+(?P<expected>[0-9a-fx_]+).*?(?:actual|got|received)[\s:=]+(?P<actual>[0-9a-fx_]+)",
+    r"(?i)expected[\s:=]+(?P<expected>[0-9a-fx_']+).*?(?:actual|got|received)[\s:=]+(?P<actual>[0-9a-fx_']+)",
+)
+_TIME_RE = re.compile(r"@\s*(?P<time>[\d.]+)\s*(?:ns)?")
+_COMPONENT_RE = re.compile(
+    r"(?i)(?:component|checker|monitor|SB|scoreboard)[:\s_]+(?P<name>\w+)",
 )
 
-_TIME_RE = re.compile(r"@\s*(?P<time>\d+)")
+
+def _find_debug_log(sim_dir: Path) -> Path | None:
+    for candidate in [sim_dir / "debug.log", sim_dir / "logs" / "debug.log"]:
+        try:
+            r = validate_path(str(candidate.relative_to(sim_dir)), sim_dir)
+            if r.is_file():
+                return r
+        except Exception:
+            continue
+    return None
 
 
 def _build_get_scoreboard_mismatches_handler(sim_dir: Path):
-    """Return a handler for get_scoreboard_mismatches bound to *sim_dir*."""
+    def get_scoreboard_mismatches(
+        max_mismatches: int = 50,
+        pattern: str = "",
+    ) -> str:
+        """Extract scoreboard mismatch summary from debug.log.
 
-    def get_scoreboard_mismatches(log_file: str = "sim.log") -> str:
-        """Extract scoreboard mismatch summary from a simulation log.
+        Aggregates mismatches by component and returns time range,
+        expected vs. actual values, and per-component counts.
+
+        IMPORTANT: Only debug.log is read — never source RTL or design files.
 
         Args:
-            log_file: Log file to scan (default: sim.log).
+            max_mismatches: Max individual mismatches to capture (1–200, default 50).
+            pattern:        Optional regex to filter mismatch lines
+                            (e.g. 'TLP', 'CplD', 'data_checker').
 
         Returns:
-            JSON: {total_mismatches, first_time, last_time,
-                   components: [{name, expected, actual, count}]}
+            Formatted text: aggregate stats + up to max_mismatches entries.
         """
-        basename = Path(log_file).name
-        allowed = {"sim.log", "run.log", "questa.log"}
-        if basename not in allowed:
-            return json.dumps({
-                "error": f"Not allowed: '{log_file}'. Use one of: {', '.join(sorted(allowed))}"
-            })
-
-        candidates = [sim_dir / basename, sim_dir / "logs" / basename]
-        log_path = None
-        for c in candidates:
-            try:
-                r = validate_path(str(c.relative_to(sim_dir)), sim_dir)
-                if r.exists():
-                    log_path = r
-                    break
-            except Exception:
-                continue
-
+        log_path = _find_debug_log(sim_dir)
         if log_path is None:
-            return json.dumps({"error": f"Log file not found: {log_file}"})
+            return "ERROR: debug.log not found. Use list_sim_files() to check available files."
 
         try:
             text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
-            return json.dumps({"error": str(exc)})
+            return f"ERROR: Cannot read debug.log: {exc}"
 
-        # Aggregate by component
+        max_mismatches = max(1, min(max_mismatches, 200))
+
+        if pattern:
+            try:
+                user_re = re.compile(pattern, re.IGNORECASE)
+            except re.error as exc:
+                return f"ERROR: Invalid pattern '{pattern}': {exc}"
+        else:
+            user_re = None
+
         components: dict[str, dict] = {}
-        times: list[int] = []
+        times: list[float] = []
+        sample_entries: list[str] = []
+        total = 0
 
         for line in text.splitlines():
-            if not _MISMATCH_LINE_RE.search(line):
+            if not _MISMATCH_RE.search(line):
+                continue
+            if user_re and not user_re.search(line):
                 continue
 
-            # Extract time
-            time_m = _TIME_RE.search(line)
-            t = int(time_m.group("time")) if time_m else None
+            total += 1
+
+            tm = _TIME_RE.search(line)
+            t = float(tm.group("time")) if tm else None
             if t is not None:
                 times.append(t)
 
-            # Extract component name
-            comp_m = _COMPONENT_RE.search(line)
-            comp_name = comp_m.group("name") if comp_m else "unknown"
+            cm = _COMPONENT_RE.search(line)
+            comp = cm.group("name") if cm else "unknown"
 
-            # Extract expected/actual values
-            val_m = _VALUE_RE.search(line)
-            expected = val_m.group("expected") if val_m else "?"
-            actual = val_m.group("actual") if val_m else "?"
+            vm = _VALUE_RE.search(line)
+            expected = vm.group("expected") if vm else "?"
+            actual = vm.group("actual") if vm else "?"
 
-            if comp_name not in components:
-                components[comp_name] = {
-                    "name": comp_name,
-                    "expected": expected,
-                    "actual": actual,
-                    "count": 0,
-                }
-            components[comp_name]["count"] += 1
+            if comp not in components:
+                components[comp] = {"name": comp, "expected": expected, "actual": actual, "count": 0}
+            components[comp]["count"] += 1
 
-        result = {
-            "total_mismatches": sum(c["count"] for c in components.values()),
-            "first_time": min(times) if times else None,
-            "last_time": max(times) if times else None,
-            "components": list(components.values()),
-        }
+            if len(sample_entries) < max_mismatches:
+                sample_entries.append(
+                    f"  [t={t}ns] comp={comp} "
+                    f"expected={expected} actual={actual}"
+                )
 
-        return json.dumps(result, indent=2)
+        if total == 0:
+            return (
+                "=== Scoreboard Mismatches in debug.log ===\n"
+                "No scoreboard mismatches found"
+                + (f" matching pattern '{pattern}'" if pattern else "")
+                + ".\n"
+                "Use get_debug_log(pattern='mismatch') for broader search."
+            )
+
+        lines = [
+            f"=== Scoreboard Mismatches in debug.log"
+            + (f" [pattern='{pattern}']" if pattern else "")
+            + " ===",
+            f"Total: {total} mismatch(es)",
+            f"Time range: {min(times):.1f}ns — {max(times):.1f}ns" if times else "Time: unknown",
+            "",
+            "Per-component breakdown:",
+        ]
+        for c in sorted(components.values(), key=lambda x: -x["count"]):
+            lines.append(
+                f"  {c['name']}: {c['count']} mismatch(es)  "
+                f"(expected={c['expected']}, actual={c['actual']})"
+            )
+        lines.append(
+            f"\nFirst {len(sample_entries)} entries"
+            + (f" (of {total})" if total > max_mismatches else "")
+            + ":"
+        )
+        lines.extend(sample_entries)
+        return "\n".join(lines)
 
     return get_scoreboard_mismatches
 
 
 def build_scoreboard_tools(sim_dir: Path) -> list[tuple]:
-    """Return tool spec tuples for scoreboard tools."""
     return [
         (
             "get_scoreboard_mismatches",
             (
-                "Extract scoreboard mismatch summary from simulation logs. "
-                "Returns aggregated stats (total count, time range, per-component breakdown) — "
-                "not raw comparison data. Use when error extraction mentions scoreboard mismatches."
+                "Extract scoreboard mismatch summary from debug.log. "
+                "Returns aggregate stats: total count, time range, per-component breakdown. "
+                "Use pattern to filter by TLP type, component name, or data field. "
+                "IMPORTANT: Only reads debug.log — never source RTL or design files."
             ),
             {
                 "type": "object",
                 "properties": {
-                    "log_file": {
+                    "max_mismatches": {
+                        "type": "integer",
+                        "description": "Max mismatch entries to return (1–200, default 50).",
+                        "minimum": 1,
+                        "maximum": 200,
+                    },
+                    "pattern": {
                         "type": "string",
-                        "enum": ["sim.log", "run.log", "questa.log"],
-                        "description": "Log file to scan (default: sim.log).",
-                    }
+                        "description": (
+                            "Optional regex to filter mismatch lines "
+                            "(e.g. 'TLP', 'CplD', 'data_checker')."
+                        ),
+                    },
                 },
                 "required": [],
             },

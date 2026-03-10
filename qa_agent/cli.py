@@ -148,13 +148,26 @@ def main() -> None:
     # ── report ────────────────────────────────────────────────────────────────
     report_parser = subparsers.add_parser(
         "report",
-        help="AI-Driven Debug Report from Simulation Output.",
+        help="AI-driven debug report from Questa simulation output.",
         description=(
-            "Generate a structured debug report from Questa/Visualizer simulation output.\n"
-            "The AI investigates failures by requesting targeted data safely.\n\n"
-            "  qa-agent report /path/to/simulation/dir\n"
-            "  qa-agent report . -p openai\n"
-            "  qa-agent report . -o debug_report.md\n"
+            "Generate a structured debug report from Questa/Visualizer simulation output.\n\n"
+            "Stream mode (default): pre-fetches all data into a single AI prompt.\n"
+            "Agentic mode (--agentic): AI uses tools to discover and fetch data;\n"
+            "  each result is shown for preview before feeding to AI.\n\n"
+            "  # Stream mode (default):\n"
+            "  qa-agent report /path/to/debug_apcit_cpl_out_order_1234\n"
+            "  qa-agent report . -p openai\n\n"
+            "  # Agentic mode:\n"
+            "  qa-agent report /path/to/debug_dir --agentic\n"
+            "  qa-agent report /path/to/debug_dir --agentic --auto-accept\n"
+            "  qa-agent report --agentic               # batch: all debug_* in cwd\n\n"
+            "  # Regression comparison:\n"
+            "  qa-agent report --compare OLD_SUMMARY.md NEW_SUMMARY.md\n\n"
+            "  Output files:\n"
+            "  DEBUG_CASE_REPORT_<ts>.md         individual debug case reports\n"
+            "  QA-REGRESSION-SUMMARY_<ts>.md     batch aggregate report\n"
+            "  QA-AGENT_TIMESTAMPS_<ts>.json     waveform timestamps (agentic)\n"
+            "  QA-REGRESSION-COMPARISON_<ts>.md  comparison report (--compare)\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -163,41 +176,79 @@ def main() -> None:
         nargs="?",
         default=None,
         metavar="SIM_DIR",
-        help="Simulation output directory (contains qrun.out/, logs/, etc.). If omitted, runs on all debug_* subdirectories.",
+        help=(
+            "Simulation output directory (debug_*/qrun.out/logs/). "
+            "If omitted (and --compare not set), runs on all debug_* subdirs in cwd."
+        ),
     )
     report_parser.add_argument(
         "--provider", "-p",
         choices=["claude", "openai", "gemini"],
         default="claude",
         metavar="PROVIDER",
-        help="AI provider to use: claude (default), openai, gemini.",
+        help="AI provider: claude (default), openai, gemini.",
     )
     report_parser.add_argument(
         "--output", "-o",
         default=None,
         metavar="PATH",
-        help="Path for the output report (default: debug_report_<timestamp>.md).",
+        help="Output file path (single-dir mode only; auto-named otherwise).",
     )
     report_parser.add_argument(
         "--max-turns",
         type=int,
-        default=15,
+        default=20,
         metavar="N",
-        help="Max AI investigation turns (default: 15).",
+        help="Max AI investigation turns in agentic mode (default: 20).",
+    )
+    report_parser.add_argument(
+        "--agentic",
+        action="store_true",
+        default=False,
+        help=(
+            "Agentic mode: AI uses tools to fetch data. Each result is previewed "
+            "before feeding to AI. Includes confidence scoring, waveform timestamps, "
+            "and cross-failure correlation in batch mode."
+        ),
+    )
+    report_parser.add_argument(
+        "--auto-accept",
+        action="store_true",
+        default=False,
+        dest="auto_accept",
+        help=(
+            "(Agentic mode) Auto-accept all tool results without review. "
+            "Equivalent to pressing Tab+Shift at the start of the session."
+        ),
+    )
+    report_parser.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("OLD_REPORT", "NEW_REPORT"),
+        default=None,
+        help=(
+            "Compare two QA-REGRESSION-SUMMARY_*.md files and write a "
+            "QA-REGRESSION-COMPARISON_*.md diff report (new failures, fixes, recurring)."
+        ),
     )
     report_parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         default=False,
-        help="Show detailed progress, tool calls, and raw AI reasoning.",
+        help="Show detailed progress. In agentic mode, adds tool name/args to data preview.",
     )
     report_parser.add_argument(
         "--gvim",
         action="store_true",
         default=False,
-        help="Open prompt and data being sent to the AI in gvim step by step.",
+        help=(
+            "Open data for AI review in gvim instead of terminal preview. "
+            "In stream mode: shows assembled prompt. "
+            "In agentic mode: each tool result opens in gvim."
+        ),
     )
-    
+
+
     # ── regression ────────────────────────────────────────────────────────────
     regression_parser = subparsers.add_parser(
         "regression",
@@ -348,6 +399,9 @@ def main() -> None:
                 verbose=args.verbose,
                 debug=args.debug,
                 gvim=args.gvim,
+                agentic=getattr(args, "agentic", False),
+                auto_accept=getattr(args, "auto_accept", False),
+                compare=tuple(args.compare) if getattr(args, "compare", None) else None,
                 log=log,
             )
 

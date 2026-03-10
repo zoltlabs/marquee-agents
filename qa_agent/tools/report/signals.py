@@ -2,101 +2,101 @@
 
 Tool: read_signal_values
 
-Reads specific signal values at specific simulation times from waveform
-dump files or signal logs. Returns only the requested signals in a short
-time window — no full waveform dumps.
+Reads signal values from text-based signal logs in the simulation directory.
+Binary waveform files (.vcd, .fsdb, qwave.db) are NOT accessible — only
+text-based logs.  The tool informs the AI if no signal log is available.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
 from qa_agent.tools.report.security import validate_path
 
-# Common signal value log filenames
-_SIGNAL_LOG_NAMES = {"signals.log", "wave.log", "dump.log", "signals.txt"}
+# Text-based signal log filenames that may exist in Questa output
+_SIGNAL_LOG_NAMES = ["signals.log", "wave.log", "dump.log", "signals.txt"]
 
-# Patterns for signal values in various formats
-# VCD-style: "#12345\n$dumpvars\nb0101 signal_name"
-# Questa wave log: "# 12345 ns signal = 8'h0A"
-_QUESTA_SIGNAL_RE = re.compile(
-    r"#\s*(?P<time>\d+)\s+ns\s+(?P<signal>[\w./]+)\s*=\s*(?P<value>[^\s]+)"
+# Questa wave log format: "# 12345 ns signal = 8'hAB"
+_QUESTA_RE = re.compile(
+    r"#\s*(?P<time>[\d.]+)\s+ns\s+(?P<signal>[\w./]+)\s*=\s*(?P<value>[^\s]+)"
 )
-_GENERIC_SIGNAL_RE = re.compile(
+# Generic: "12345 signal = 8'hAB"
+_GENERIC_RE = re.compile(
     r"(?P<time>\d+)\s+(?P<signal>[\w./]+)\s*[=:]\s*(?P<value>[^\s]+)"
 )
 
+_MAX_RESULTS = 500
+
+
+def _find_signal_log(sim_dir: Path) -> Path | None:
+    for name in _SIGNAL_LOG_NAMES:
+        for base in [sim_dir, sim_dir / "logs", sim_dir / "qrun.out"]:
+            candidate = base / name
+            try:
+                r = validate_path(str(candidate.relative_to(sim_dir)), sim_dir)
+                if r.is_file():
+                    return r
+            except Exception:
+                continue
+    return None
+
 
 def _build_read_signal_values_handler(sim_dir: Path):
-    """Return a handler for read_signal_values bound to *sim_dir*."""
-
     def read_signal_values(
         signals: list[str],
-        time: int,
-        window: int = 100,
+        time_ns: float,
+        window_ns: float = 10.0,
     ) -> str:
-        """Read specific signal values at a specific simulation time.
+        """Read signal values from a text-based signal log near a simulation time.
+
+        NOTE: Binary waveform files (qwave.db, .vcd, .fsdb) cannot be read.
+        Only text-based signal logs (signals.log, wave.log) are accessible.
+        If no signal log exists, the tool reports this clearly.
+
+        For waveform inspection, the Debugging Recommendations section should
+        reference Visualizer with exact timestamps extracted from debug.log.
 
         Args:
-            signals: List of signal names to look up (e.g. ["apci_rx.state", "clk"]).
-            time:    The simulation time of interest.
-            window:  Time window in simulation units around *time* (default: 100).
-                     Values from [time-window, time+window] are returned.
+            signals:   Signal names to look up (max 20).
+                       E.g. ['phy_rx_valid', 'ltssm_state', 'clk'].
+            time_ns:   The simulation time of interest (nanoseconds).
+            window_ns: Time window around time_ns to search
+                       (±window_ns, default ±10ns).
 
         Returns:
-            JSON table of {signal, time, value} rows.
+            Formatted text: {signal, time_ns, value} rows or not-found message.
         """
         if not signals:
-            return json.dumps({"error": "No signals specified."})
+            return "ERROR: No signals specified."
 
-        # Limit signal list to prevent abuse
         signals = signals[:20]
         signal_set = {s.lower() for s in signals}
 
-        # Find the signal log file
-        signal_path = None
-        for name in _SIGNAL_LOG_NAMES:
-            candidates = [
-                sim_dir / name,
-                sim_dir / "logs" / name,
-                sim_dir / "qrun.out" / name,
-            ]
-            for c in candidates:
-                try:
-                    r = validate_path(str(c.relative_to(sim_dir)), sim_dir)
-                    if r.exists():
-                        signal_path = r
-                        break
-                except Exception:
-                    continue
-            if signal_path:
-                break
-
-        if signal_path is None:
-            return json.dumps({
-                "error": (
-                    "No signal log file found. Looked for: "
-                    + ", ".join(_SIGNAL_LOG_NAMES)
-                    + ". Signal values may only be available in waveform files (.vcd, .fsdb) "
-                    "which require a waveform viewer."
-                )
-            })
-
-        time_min = max(0, time - window)
-        time_max = time + window
+        log_path = _find_signal_log(sim_dir)
+        if log_path is None:
+            return (
+                "INFO: No text-based signal log found.\n"
+                f"Looked for: {', '.join(_SIGNAL_LOG_NAMES)}\n"
+                "Signal values in binary waveform files (qwave.db, .vcd, .fsdb) "
+                "cannot be read by this tool.\n"
+                "Recommendation: open Visualizer and navigate to the timestamps "
+                "identified in debug.log/tracker files."
+            )
 
         try:
-            text = signal_path.read_text(encoding="utf-8", errors="replace")
+            text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
-            return json.dumps({"error": str(exc)})
+            return f"ERROR: Cannot read {log_path.name}: {exc}"
 
-        rows = []
-        for pattern in [_QUESTA_SIGNAL_RE, _GENERIC_SIGNAL_RE]:
-            for m in pattern.finditer(text):
-                t = int(m.group("time"))
-                if not (time_min <= t <= time_max):
+        t_min = max(0.0, time_ns - window_ns)
+        t_max = time_ns + window_ns
+
+        rows: list[dict] = []
+        for pat in [_QUESTA_RE, _GENERIC_RE]:
+            for m in pat.finditer(text):
+                t = float(m.group("time"))
+                if not (t_min <= t <= t_max):
                     continue
                 sig = m.group("signal")
                 if sig.lower() not in signal_set and not any(
@@ -105,34 +105,45 @@ def _build_read_signal_values_handler(sim_dir: Path):
                     continue
                 rows.append({
                     "signal": sig,
-                    "time": t,
+                    "time_ns": t,
                     "value": m.group("value"),
                 })
+                if len(rows) >= _MAX_RESULTS:
+                    break
+            if len(rows) >= _MAX_RESULTS:
+                break
 
         if not rows:
-            return json.dumps({
-                "rows": [],
-                "message": (
-                    f"No values found for signals {signals} in time window "
-                    f"[{time_min}, {time_max}]."
-                ),
-            })
+            return (
+                f"=== Signal Values near t={time_ns}ns (±{window_ns}ns) ===\n"
+                f"No values found for: {', '.join(signals)}\n"
+                f"Time window searched: [{t_min}ns, {t_max}ns]\n"
+                f"Source: {log_path.name}"
+            )
 
-        return json.dumps({"rows": rows[:200]}, indent=2)
+        header = (
+            f"=== Signal Values near t={time_ns}ns (±{window_ns}ns) ===\n"
+            f"Source: {log_path.name}  |  {len(rows)} result(s)\n"
+        )
+        result_lines = [
+            f"  t={r['time_ns']}ns  {r['signal']} = {r['value']}"
+            for r in rows
+        ]
+        return header + "\n".join(result_lines)
 
     return read_signal_values
 
 
 def build_signal_tools(sim_dir: Path) -> list[tuple]:
-    """Return tool spec tuples for signal tools."""
     return [
         (
             "read_signal_values",
             (
-                "Read specific signal values at a specific simulation time from signal logs. "
-                "Only returns requested signals within a short time window. "
-                "Use only when error messages mention specific signals by name. "
-                "Note: full waveform files (.vcd, .fsdb) cannot be read — only text signal logs."
+                "Read signal values at a specific simulation time from a text-based signal log. "
+                "Returns values within ±window_ns of the target time. "
+                "NOTE: Binary waveform files (qwave.db, .vcd) cannot be read. "
+                "If no signal log exists, the tool provides waveform guidance instead. "
+                "Use only when error messages reference specific signal names."
             ),
             {
                 "type": "object",
@@ -140,18 +151,18 @@ def build_signal_tools(sim_dir: Path) -> list[tuple]:
                     "signals": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Signal names to look up (max 20), e.g. ['apci_rx.state', 'clk'].",
+                        "description": "Signal names to look up (max 20), e.g. ['phy_rx_valid', 'ltssm_state'].",
                     },
-                    "time": {
-                        "type": "integer",
-                        "description": "Simulation time of interest.",
+                    "time_ns": {
+                        "type": "number",
+                        "description": "Simulation time of interest in nanoseconds.",
                     },
-                    "window": {
-                        "type": "integer",
-                        "description": "Time window around the target time (default: 100 time units).",
+                    "window_ns": {
+                        "type": "number",
+                        "description": "Time window around time_ns to search (default ±10ns).",
                     },
                 },
-                "required": ["signals", "time"],
+                "required": ["signals", "time_ns"],
             },
             _build_read_signal_values_handler(sim_dir),
         ),

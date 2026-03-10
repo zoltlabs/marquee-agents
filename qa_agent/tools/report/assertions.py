@@ -2,128 +2,171 @@
 
 Tool: get_assertion_failures
 
-Extracts SystemVerilog assertion failures from simulation logs.
-Returns structured JSON — not raw log lines.
+Extracts SystemVerilog assertion (SVA) failures from debug.log.
+Only debug.log is accessible — never source RTL or design files.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
 from qa_agent.tools.report.security import validate_path
 
-# Patterns that match SVA assertion failures in common simulators (Questa, VCS, Xcelium)
+# SVA failure patterns for Questa/vsim output
 _SVA_PATTERNS = [
-    # Questa: ** Error: (vsim-XXXX) /path/to/file.sv(42): Assertion error: <name>
+    # Questa: ** Error: (vsim-XXXX) /path/file.sv(42): Assertion error: <name>
     re.compile(
-        r"(?i)\*+\s*(error|failure).*?assert.*?(?:at|in)?\s*(?P<file>[^\s:]+\.sv[h]?)\((?P<line>\d+)\)"
-        r"[^\n]*?:\s*(?P<msg>.*?)(?:\s*Time:\s*(?P<time>[\d]+))?$",
+        r"(?i)\*+\s*(error|failure).*?assert.*?"
+        r"(?:at|in)?\s*(?P<file>[^\s:]+\.svh?)(?:\((?P<line>\d+)\))?"
+        r"[^\n]*?:\s*(?P<msg>[^\n]+?)(?:\s+Time:\s*(?P<time>[\d.]+))?$",
         re.MULTILINE,
     ),
     # Generic: "Assertion failed: <name> at time <N>"
     re.compile(
-        r"(?i)assertion\s+(?:failed|error)[:\s]+(?P<msg>[^\n]+?)(?:\s+at\s+time\s+(?P<time>\d+))?$",
+        r"(?i)assertion\s+(?:failed|error)[:\s]+(?P<msg>[^\n]+?)"
+        r"(?:\s+at\s+time\s+(?P<time>[\d.]+))?$",
         re.MULTILINE,
     ),
-    # Questa UVM assertion: "UVM_ERROR ... Assertion"
+    # Questa UVM: "UVM_ERROR/FATAL <file>(<line>) @ <time>ns: <msg>"
     re.compile(
-        r"(?i)UVM_(?:ERROR|FATAL)\s+(?P<file>[^\s]+)\((?P<line>\d+)\)\s+@\s+(?P<time>\d+)[^:]*:\s+(?P<msg>[^\n]+)",
+        r"(?i)UVM_(?:ERROR|FATAL)\s+(?P<file>[^\s]+)\((?P<line>\d+)\)"
+        r"\s+@\s+(?P<time>[\d.]+)[^:]*:\s+(?P<msg>[^\n]+)",
         re.MULTILINE,
     ),
 ]
 
 
-def _build_get_assertion_failures_handler(sim_dir: Path):
-    """Return a handler for get_assertion_failures bound to *sim_dir*."""
+def _find_debug_log(sim_dir: Path) -> Path | None:
+    for candidate in [sim_dir / "debug.log", sim_dir / "logs" / "debug.log"]:
+        try:
+            r = validate_path(str(candidate.relative_to(sim_dir)), sim_dir)
+            if r.is_file():
+                return r
+        except Exception:
+            continue
+    return None
 
-    def get_assertion_failures(log_file: str = "sim.log") -> str:
-        """Extract SystemVerilog assertion failures from a simulation log.
+
+def _build_get_assertion_failures_handler(sim_dir: Path):
+    def get_assertion_failures(
+        pattern: str = "",
+        max_failures: int = 50,
+    ) -> str:
+        """Extract SystemVerilog assertion failures from debug.log.
+
+        Searches for SVA property violations, UVM_FATAL/UVM_ERROR assertion
+        messages, and Questa vsim assertion error codes.
+
+        IMPORTANT: Only debug.log is read — not source RTL or design files.
 
         Args:
-            log_file: Log file to scan (default: sim.log).
+            pattern:      Optional regex to further filter failure messages
+                          (e.g. 'phy_rx_valid', 'pcie_link_test').
+            max_failures: Max failures to return (1–100, default 50).
 
         Returns:
-            JSON array of {assertion, time, module, message} objects.
+            Formatted text: one failure block per SVA assertion found.
         """
-        basename = Path(log_file).name
-        allowed = {"sim.log", "run.log", "questa.log"}
-        if basename not in allowed:
-            return json.dumps({
-                "error": f"Not allowed: '{log_file}'. Use one of: {', '.join(sorted(allowed))}"
-            })
-
-        # Find the log file
-        candidates = [sim_dir / basename, sim_dir / "logs" / basename]
-        log_path = None
-        for c in candidates:
-            try:
-                r = validate_path(str(c.relative_to(sim_dir)), sim_dir)
-                if r.exists():
-                    log_path = r
-                    break
-            except Exception:
-                continue
-
+        log_path = _find_debug_log(sim_dir)
         if log_path is None:
-            return json.dumps({"error": f"Log file not found: {log_file}"})
+            return "ERROR: debug.log not found. Use list_sim_files() to check available files."
 
         try:
             text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
-            return json.dumps({"error": str(exc)})
+            return f"ERROR: Cannot read debug.log: {exc}"
 
-        failures = []
-        seen_msgs: set[str] = set()
+        max_failures = max(1, min(max_failures, 100))
 
-        for pattern in _SVA_PATTERNS:
-            for m in pattern.finditer(text):
-                msg = m.group("msg").strip() if "msg" in pattern.groupindex else m.group(0).strip()
-                # Deduplicate
-                if msg in seen_msgs:
+        if pattern:
+            try:
+                user_re = re.compile(pattern, re.IGNORECASE)
+            except re.error as exc:
+                return f"ERROR: Invalid pattern '{pattern}': {exc}"
+        else:
+            user_re = None
+
+        failures: list[dict] = []
+        seen: set[str] = set()
+
+        for pat in _SVA_PATTERNS:
+            for m in pat.finditer(text):
+                msg = (m.group("msg").strip() if "msg" in pat.groupindex and m.group("msg")
+                       else m.group(0).strip())[:300]
+                if msg in seen:
                     continue
-                seen_msgs.add(msg)
-
-                entry = {
-                    "assertion": msg[:200],
-                    "time": m.group("time").strip() if "time" in pattern.groupindex and m.group("time") else "unknown",
-                    "module": m.group("file") if "file" in pattern.groupindex and m.group("file") else "unknown",
-                    "message": msg[:300],
-                }
-                failures.append(entry)
-
-                if len(failures) >= 50:
+                if user_re and not user_re.search(msg):
+                    continue
+                seen.add(msg)
+                failures.append({
+                    "message": msg,
+                    "time": (m.group("time").strip()
+                             if "time" in pat.groupindex and m.group("time")
+                             else "unknown"),
+                    "file": (m.group("file")
+                             if "file" in pat.groupindex and m.group("file")
+                             else "unknown"),
+                    "line": (m.group("line")
+                             if "line" in pat.groupindex and m.group("line")
+                             else "?"),
+                })
+                if len(failures) >= max_failures:
                     break
-            if len(failures) >= 50:
+            if len(failures) >= max_failures:
                 break
 
-        return json.dumps({
-            "assertion_failures": failures,
-            "total": len(failures),
-        }, indent=2)
+        if not failures:
+            return (
+                f"=== Assertion Failures in debug.log ===\n"
+                f"No SVA assertion failures found"
+                + (f" matching pattern '{pattern}'" if pattern else "")
+                + ".\n"
+                "Use get_debug_log(pattern='UVM_FATAL') for broad failure search."
+            )
+
+        lines = [
+            f"=== {len(failures)} SVA Assertion Failure(s) in debug.log "
+            + (f"[pattern='{pattern}'] " if pattern else "")
+            + "==="
+        ]
+        for i, f in enumerate(failures, 1):
+            lines.append(
+                f"\n[{i}] Time: {f['time']}ns  File: {f['file']}:{f['line']}\n"
+                f"    {f['message']}"
+            )
+        return "\n".join(lines)
 
     return get_assertion_failures
 
 
 def build_assertion_tools(sim_dir: Path) -> list[tuple]:
-    """Return tool spec tuples for assertion tools."""
     return [
         (
             "get_assertion_failures",
             (
-                "Extract SystemVerilog assertion failures from simulation logs. "
-                "Returns structured {assertion, time, module, message} entries — not raw lines. "
-                "Use after extract_log_errors if assertion failures are mentioned."
+                "Extract SystemVerilog SVA assertion failures from debug.log. "
+                "Returns structured failure entries: time, file, line, message. "
+                "Use pattern to filter by assertion/signal name. "
+                "IMPORTANT: Only reads debug.log — never source RTL or design files."
             ),
             {
                 "type": "object",
                 "properties": {
-                    "log_file": {
+                    "pattern": {
                         "type": "string",
-                        "enum": ["sim.log", "run.log", "questa.log"],
-                        "description": "Log file to scan (default: sim.log).",
-                    }
+                        "description": (
+                            "Optional regex to filter by message content "
+                            "(e.g. 'phy_rx_valid', 'pcie_link', 'LTSSM'). "
+                            "Leave empty to return all assertion failures."
+                        ),
+                    },
+                    "max_failures": {
+                        "type": "integer",
+                        "description": "Max failures to return (1–100, default 50).",
+                        "minimum": 1,
+                        "maximum": 100,
+                    },
                 },
                 "required": [],
             },
