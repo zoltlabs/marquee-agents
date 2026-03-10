@@ -155,7 +155,13 @@ async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[n
     os.chdir(sandbox_dir)
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        api_key_str = (
+            api_key.get("ANTHROPIC_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or None
+        )
+        client = anthropic.AsyncAnthropic(api_key=api_key_str)
+
         model = request.model or "claude-3-5-sonnet-20241022"
         tools_schema = request.tools.to_claude_schema()
 
