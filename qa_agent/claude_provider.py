@@ -156,7 +156,7 @@ async def chat_with_tools(request: "ToolCallRequest") -> dict:  # type: ignore[n
 
     try:
         client = anthropic.AsyncAnthropic(api_key=api_key)
-        model = request.model or "claude-3-5-sonnet-20241022"
+        model = "claude-sonnet-4-6"
         tools_schema = request.tools.to_claude_schema()
 
         system_msg = ""
